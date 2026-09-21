@@ -5,6 +5,34 @@ serialized objects were moved without recalculation or content changes on
 2026-09-21. Historical PDFs were moved by source script, with the recovery
 exception documented below.
 
+## Version V1: organised analysis baseline
+
+This repository is the **V1 organised baseline**.  It freezes the current
+sample-selection rule and the corresponding analysis code; it is not a claim
+that this is the final sample set for every future analysis.
+
+The starting cohort contains **340 samples**.  The historical review first
+identified **61 directly abnormal samples**.  Because the analysis is carried
+out on the `Rep3` unified experimental-unit definition, any unit represented by
+one of those direct exceptions is removed as a whole.  This expands the
+exclusion to **49 unified experimental units, comprising 192 samples**, and
+leaves **148 samples** for the V1 analysis.
+
+```text
+340 starting samples
+  - 61 directly abnormal samples (historical identification)
+  -> remove 49 affected Rep3 unified experimental units (192 samples in total)
+148 samples retained for V1
+```
+
+The direct-exception IDs are retained in
+`01.rawdata/Group/01.data_preparation/legacy_problem_sample_ids.tsv`; the
+expansion to `Rep3` units is implemented in `00.libs/01.data_preparation.Rmd`.
+Raw inputs are intentionally excluded from Git, so the source data must be
+obtained separately.  Any later change to the sample-selection rule or retained
+sample count should be recorded as a new analysis version, with its rationale
+and counts documented rather than modifying the meaning of V1 retrospectively.
+
 ## Layout
 
 ```text
@@ -40,10 +68,11 @@ figure or RData file is overwritten.
 
 `01.data_preparation.Rmd` reads
 `01.rawdata/Group/01.data_preparation/legacy_problem_sample_ids.tsv`. This is
-the explicit 61-sample exclusion set exported from the historical
-`ProblemID.Rdata` workflow (including `CS53`); it preserves the legacy
-filtering decision without a circular dependency on a previously generated
-RData file.
+the explicit list of 61 directly abnormal samples exported from the historical
+`ProblemID.Rdata` workflow (including `CS53`).  The script expands those IDs to
+the affected `Rep3` unified experimental units before filtering, which is the
+V1 340-to-148 sample-selection rule described above.  This preserves the legacy
+decision without a circular dependency on a previously generated RData file.
 
 ## Execution check (2026-09-21)
 
