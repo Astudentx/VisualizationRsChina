@@ -1,0 +1,2095 @@
+---
+title: "01.Microbe"
+author: "yaozhong_zhang"
+date: "2023-02-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+path <- getwd()
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = path)
+knitr::opts_knit$set(root.dir = path)
+package <- c('readxl','magrittr','LorMe','randomForest',
+             'ggtree','reshape2','ggplot2','dplyr','tidyr',
+             'readr','purrr','tibble','stringr','forcats',
+             'ggplot2','ggsci','ggridges','RColorBrewer','pheatmap',
+             'patchwork','ggpubr','zyzPackage','cowplot','ggrepel','networkD3','vegan')
+
+lapply(package, function(x){library(x, character.only = T)}) 
+# load("04.datasave/Rdata/Group_and_tax_V230225.Rdata")
+load("04.datasave/Rdata/Group_and_tax_filter_V230810.Rdata")
+source("00.libs/functions/legacy_helpers.R")
+source("00.libs/functions/project_paths.R")
+arg_profile_file <- "04.datasave/Rdata/ARG_host_species_profiles.RData"
+if (!file.exists(arg_profile_file)) {
+  stop("Run 03.arg_analysis.Rmd before this integrated microbiome workflow: missing ", arg_profile_file)
+}
+load(arg_profile_file)
+
+# 一定要设置select，不然会顺序错误！
+rename_jgf <- function(df){
+  df_sel <- df %>% dplyr::select(ID,all_of(Group$LinuxID))
+  colnames(df_sel)[ colnames(df_sel) %in% Group$LinuxID ] <- Group$ID
+  return(df_sel)
+}
+
+
+# 定义纯统计分析函数（含相对占比计算）
+get_top_taxa <- function(df, id_col = "ID", top_n = 10) {
+  
+  # 1. 确保数据框中包含数值列
+  num_cols <- sapply(df, is.numeric)
+  if (!any(num_cols)) stop("数据框中没有数值列！")
+  
+  # 2. 计算每个物种（每一行）在所有样本中的平均绝对/相对丰度
+  df_mean <- df %>%
+    mutate(Mean_Abundance = rowMeans(select(., where(is.numeric)), na.rm = TRUE)) %>%
+    arrange(desc(Mean_Abundance))
+  
+  # 3. 计算整个数据集（所有物种）的累计平均丰度总和（总体本底）
+  total_abundance <- sum(df_mean$Mean_Abundance, na.rm = TRUE)
+  
+  # 4. 提取 Top N 的物种名单及其平均丰度，并新增一列计算其相对占比（%）
+  top_summary <- df_mean %>%
+    head(top_n) %>%
+    select(all_of(id_col), Mean_Abundance) %>%
+    mutate(Relative_Proportion_Pct = (Mean_Abundance / total_abundance) * 100) # 新增百分比占比列
+  
+  # 5. 计算 Top N 物种的累计平均丰度总和（绝对值）
+  top_sum_abundance <- sum(top_summary$Mean_Abundance, na.rm = TRUE)
+  
+  # 6. 计算 Top N 物种总共占整个群落的相对比例（%）
+  top_sum_proportion <- sum(top_summary$Relative_Proportion_Pct, na.rm = TRUE)
+  
+  # 返回一个列表，包含核心统计结果
+  return(list(
+    Top_Summary = top_summary,                 # 1. TopN物种明细、平均丰度及相对占比(%)
+    Total_Abundance = total_abundance,         # 2. 样品整体的平均丰度总和（整体本底值）
+    Top_Sum_Abundance = top_sum_abundance,     # 3. TopN物种的累计丰度总和（绝对值）
+    Top_Sum_Proportion_Pct = top_sum_proportion# 4. TopN物种累计占整体的百分比(%)
+  ))
+}
+```
+
+# 微生物数据基础导入
+```{r}
+Bac_P_ab <- read.delim("01.rawdata/Tax_kraken/Final.Bacteria.P.xls",header = T,check.names = F) %>% rename_jgf()
+Bac_S_ab <- read.delim("01.rawdata/Tax_kraken/Final.Bacteria.S.xls",header = T,check.names = F) %>% rename_jgf()
+Bac_G_ab <- read.delim("01.rawdata/Tax_kraken/Final.Bacteria.G.xls",header = T,check.names = F) %>% rename_jgf()
+Bac_P_re <- Bac_P_ab %>% sweep_zyz(.,format = 2)
+Bac_S_re <- Bac_S_ab %>% sweep_zyz(.,format = 2)
+Bac_G_re <- Bac_G_ab %>% sweep_zyz(.,format = 2)
+
+
+
+Group_list <- list(
+  Group_h = Group_h,
+  Group_d = Group_d,
+  Group_rh = Group_rh,
+  Group_ck = Group_ck,
+  Group_nck = Group_nck,
+  Group_st = Group_st,
+  Group_hrh = Group_hrh,
+  Group_hst = Group_hst,
+  Group_dst = Group_dst,
+  Group_drh = Group_drh
+)
+
+
+Group_selID(prefix = "Bac_G_ab",df = Bac_G_ab,Group_list = Group_list)
+Group_selID(prefix = "Bac_G_re",df = Bac_G_re,Group_list = Group_list)
+Group_selID(prefix = "Bac_S_ab",df = Bac_S_ab,Group_list = Group_list)
+Group_selID(prefix = "Bac_S_re",df = Bac_S_re,Group_list = Group_list)
+Group_selID(prefix = "Bac_P_ab",df = Bac_P_ab,Group_list = Group_list)
+Group_selID(prefix = "Bac_P_re",df = Bac_P_re,Group_list = Group_list)
+
+temp1 <- Bac_G_re_hrh[which(Bac_G_re_hrh$ID=="Ralstonia"),] %>% rownames_zyz(.,transform=T)
+temp2 <- Bac_G_re_hst[which(Bac_G_re_hst$ID=="Ralstonia"),] %>% rownames_zyz(.,transform=T)
+temp3 <- Bac_G_re_drh[which(Bac_G_re_drh$ID=="Ralstonia"),] %>% rownames_zyz(.,transform=T)
+temp4 <- Bac_G_re_dst[which(Bac_G_re_dst$ID=="Ralstonia"),] %>% rownames_zyz(.,transform=T)
+
+
+# ID_problem1 <- rownames(temp1)[which(temp1$Ralstonia>0.2)]
+ID_problem2 <- rownames(temp2)[which(temp2$Ralstonia>0.2)]
+# ID_problem3 <- rownames(temp3)[which(temp3$Ralstonia<0.2)]
+ID_problem4 <- rownames(temp4)[which(temp4$Ralstonia<0.2)]
+ID_problem_final <- c(ID_problem2,ID_problem4)
+# save_rdata(ID_problem_final,file = "04.datasave/Rdata/ProblemID.Rdata")
+
+ggplot(temp1,aes(x = Ralstonia))+
+  geom_histogram()
+ggplot(temp2,aes(x = Ralstonia))+
+  geom_histogram()
+ggplot(temp3,aes(x = Ralstonia))+
+  geom_histogram()
+ggplot(temp4,aes(x = Ralstonia))+
+  geom_histogram()
+
+
+# 青枯菌丰度校正
+rs = c('Ralstonia pseudosolanacearum',
+       'Ralstonia solanacearum',
+       'blood disease bacterium A2-HR MARDI')
+
+pathogen_tax
+
+{
+  attach(pathogen_list)
+  pathogen_list_sel <- pathogen_list[which(!pathogen_list$Species %in% rs ),]
+  # 来自病原菌的ARG的ppm丰度
+  temp1 <- left_join(Bac_S_re,pathogen_list_sel,by=c("ID"="Species")) %>% dplyr::select(Host,all_of(Group$ID))
+  temp1[is.na(temp1)] <- "None pathogen"
+  temp2 <- aggregate(temp1[,-1],by=list(temp1[,1]),FUN = sum)
+  colnames(temp2)[1] <- "ID"
+  Bac_S_pa_re <- temp2
+}
+
+
+Group_selID(prefix = "Bac_S_pa_re",df = Bac_S_pa_re,Group_list = Group_list)
+
+
+
+```
+
+# 主图-微生物组成分析
+```{r}
+LorMe04::community_plot(plotprefix ="Bac_G_re_rh" ,inputframe = Bac_G_re_rh,n = 9,inputformat = 2,groupframe = Group_rh,treatlocation =8,replocation = 3 ,treatorder = c("Healthy","Diseased"))
+P1 <- Bac_G_re_rh_barplot+facet_wrap(~State,scales = "free_x",ncol = 1)+scale_x_discrete()+xlab("")+ylab("Relative abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(labels = scales::percent,expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.2, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P1
+# save_pdf(plot = P1,filename = "03.figure/02.microbiome_analysis/Bac_G_re_rh_barplot.pdf",width = 8,height = 4)
+
+LorMe04::community_plot(plotprefix ="Bac_G_re_st" ,inputframe = Bac_G_re_st,n = 9,inputformat = 2,groupframe = Group_st,treatlocation =8,replocation = 3 ,treatorder = c("Healthy","Diseased"))
+P2 <- Bac_G_re_st_barplot+facet_wrap(~State,scales = "free_x",ncol = 1)+scale_x_discrete()+xlab("")+ylab("Relative abundance")+
+  scale_fill_d3()+
+  scale_y_continuous(labels = scales::percent,expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.2, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2
+
+head(Bac_G_re_nck)
+
+LorMe04::community_plot(plotprefix ="Bac_G_re_nck" ,inputframe = Bac_G_re_nck,n = 9,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+attach(Grouped_top9)
+
+P1 <- Bac_G_re_nck_barplot+facet_grid(State~Source,scales = "free")+scale_x_discrete()+xlab("")+ylab("Relative abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(labels = scales::percent,expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P1
+save_pdf( "03.figure/02.microbiome_analysis/Bac_G_re.pdf",height = 5,width = 5)
+
+
+
+LorMe04::community_plot(plotprefix ="Bac_P_re_nck" ,inputframe = Bac_P_re_nck,n = 9,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+attach(Grouped_top9)
+
+P1 <- Bac_P_re_nck_barplot+facet_grid(State~Source,scales = "free")+scale_x_discrete()+xlab("")+ylab("Relative abundance")+
+  scale_fill_d3()+
+  scale_y_continuous(labels = scales::percent,expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P1
+save_pdf( "03.figure/02.microbiome_analysis/Bac_P_re.pdf",height = 5,width = 5)
+
+
+
+save_rdata(Bac_G_re_nck,Group_nck,file = "04.datasave/Rdata/V1_JFGNatureBacComp_231216.Rdata")
+save_rdata(Bac_G_re_rh,Group_rh,file = "04.datasave/Rdata/V1_JFGNatureBacComp2_231216.Rdata")
+
+
+P2 <- Bac_G_re_rh_alluvialplot+scale_x_discrete()+xlab("")+ylab("Relative abundance") +
+  scale_fill_npg()+
+  scale_y_continuous(labels = scales::percent,expand = c(0,0)) +theme_jgfbw()+
+  scale_x_discrete(expand = c(0.3,0.3))+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.2, "lines"))+ guides(fill=guide_legend(nrow =2))
+P2
+
+
+```
+# 统计-phD优势物种组成
+```{r}
+
+cat("所有根际样品门水平丰度")
+df1 <- get_top_taxa(df = Bac_P_re_rh,id_col = "ID",top_n = 20)
+df1$Top_Summary
+
+cat("所有茎部样品门水平丰度")
+df1 <- get_top_taxa(df = Bac_P_re_st,id_col = "ID",top_n = 20)
+df1$Top_Summary
+
+
+cat("健康根际样品属水平丰度")
+df1 <- get_top_taxa(df = Bac_G_re_hrh,id_col = "ID",top_n = 20)
+df1$Top_Summary
+
+cat("发病根际样品属水平丰度")
+df1 <- get_top_taxa(df = Bac_G_re_drh,id_col = "ID",top_n = 20)
+df1$Top_Summary
+
+cat("健康茎部样品属水平丰度")
+df1 <- get_top_taxa(df = Bac_G_re_hst,id_col = "ID",top_n = 20)
+df1$Top_Summary
+
+cat("发病茎部样品属水平丰度")
+df1 <- get_top_taxa(df = Bac_G_re_dst,id_col = "ID",top_n = 20)
+df1$Top_Summary
+
+
+
+
+```
+
+# 主图-微生物青枯菌/Ralstonia丰度
+```{r}
+rs = c('Ralstonia pseudosolanacearum',
+       'Ralstonia solanacearum',
+       'blood disease bacterium A2-HR MARDI')
+attach(Bac_S_re)
+Bac_S_re_rs1 <- Bac_S_re[which(Bac_S_re$ID %in% rs ),]
+Bac_S_re_rs2 <- Bac_S_re_rs1 %>% rownames_zyz(.)
+Bac_S_re_rs <- colSums(Bac_S_re_rs2) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(Bac_S_re_rs)[2] <- "Rs abundance"
+
+
+rs = c('Ralstonia')
+attach(Bac_G_re_rh)
+Bac_G_re_rs1 <- Bac_G_re[which(Bac_G_re$ID %in% rs ),]
+Bac_G_re_rs2 <- Bac_G_re_rs1 %>% rownames_zyz(.)
+Bac_G_re_rs <- colSums(Bac_G_re_rs2) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(Bac_G_re_rs)[2] <- "R abundance"
+
+# 合并Rs以及R
+Group_rs <- left_join(Group,Bac_S_re_rs,by = "ID") %>% left_join(.,Bac_G_re_rs,by = "ID")
+Group_rs$State <- factor(Group_rs$State,levels = c("Healthy","Diseased"))
+Group_rs_nck <- Group_rs[which(Group_rs$Source!="CK"),]
+
+
+Group_rs_nck$`R abundance`
+test_stat_Rs_for_yxr <-  Rmisc::summarySE(Group_rs_nck, measurevar=c("R abundance"), groupvars=c("State","Source"),conf.interval = 0.95)
+test_stat_Rs_for_yxr2 <-  Rmisc::summarySE(Group_rs_nck, measurevar=c("Rs abundance"), groupvars=c("State","Source"),conf.interval = 0.95)
+
+
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+# R_abundance <- ggplot(data = Group_rs,aes(x= State,y = `R abundance`,color=State))+
+R_abundance <- ggplot(data = Group_rs,aes(x= State,y = `R abundance`,color=State))+
+  theme_jgfbw()+
+  # scale_color_manual(values = color_zyz1)+
+  # scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6,size = .8)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(Source~City,scales = "free_x",nrow = 2,)+
+  theme(legend.position = "none")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  scale_y_continuous(labels = scales::percent) +
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Relative abundance of Rs")
+R_abundance
+# save_pdf("01.output/fig1/T-pair_ARGMGEboxplot.pdf",height = 4,width = 8)
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+R_abundance_all <- ggplot(data = Group_rs_nck,aes(x= State,y = `R abundance`,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6,size = .8)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~Source,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  scale_y_continuous(labels = scales::percent) +
+  # stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Relative abundance of Ralstonia")
+R_abundance_all
+save_pdf("03.figure/02.microbiome_analysis/Bac_S_Rs_Ttest.pdf",height = 3,width = 3)
+
+
+
+# JGF_nature fig3
+save_rdata(Group_rs_nck,file = "04.datasave/Rdata/V1_JFGNatureBacRs_231216.Rdata")
+
+
+
+```
+
+
+# 主图-Rs丰度
+```{r}
+
+temp <- Bac_S_pa_re %>% rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T)
+temp$`All pathogens` <- temp$Animal+temp$Zoonotic+temp$Plant
+
+# 合并Rs以及R
+Group_pa <- left_join(Group,temp,by = "ID")
+Group_pa$State <- factor(Group_pa$State,levels = c("Healthy","Diseased"))
+Group_pa_nck <- Group_pa[which(Group_pa$Source!="CK"),]
+Group_pa_nck_melt <- melt(Group_pa_nck,measure.vars = c(14:19))
+
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+pa_abundance_all <- ggplot(data = Group_pa_nck_melt,aes(x= State,y = value,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_grid(Source~variable)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  scale_y_continuous(labels = scales::percent) +
+  # stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Relative abundance of Ralstonia")
+pa_abundance_all
+save_pdf("03.figure/02.microbiome_analysis/Bac_S_pa_Ttest.pdf",height = 4,width = 8)
+
+
+
+
+
+```
+
+
+
+
+# 主图-微生物alpha多样性分析
+```{r}
+alpha_Bac <- LorMe04::Alpha_diversity_calculator(input = Bac_S_ab,prefix = "",inputformat = 2,reads = T)
+Group_alpha <- cbind(Group,alpha_Bac)
+Group_alpha$State=factor(Group_alpha$State,levels =c("None","Healthy","Diseased"))
+my_comparison=list(c("Healthy","Diseased"),c("None","Diseased"),c("Healthy","None")) #定义比较的分组
+Shannon_Bac <- ggplot(data = Group_alpha,aes(x= State,y = Shannon,color=State))+
+  theme_jgfbw()+
+  # scale_color_manual(values = color_zyz1)+
+  # scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6,size = .8)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~City,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Bacteria Shannon")
+# Shannon_Bac
+Shannon_Bac
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+Group_alpha_nck <- Group_alpha[which(Group_alpha$Source!="CK"),]
+Shannon_Bac <- ggplot(data = Group_alpha_nck,aes(x= State,y = Shannon,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6,size = .8)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~Source,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  # stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+
+  xlab("")+ylab("Bacteria Shannon")
+Shannon_Bac
+save_pdf("03.figure/02.microbiome_analysis/Bac_S_alpha_Ttest.pdf",height = 3,width = 3)
+
+
+LorMe::auto_signif_test(data = Group_alpha_nck[which(Group_alpha_nck$Source=="Rhizosphere"),],treatment_col = 8 ,value_col = 14)
+LorMe::auto_signif_test(data = Group_alpha_nck[which(Group_alpha_nck$Source=="Stem"),],treatment_col = 8 ,value_col = 14)
+
+```
+# 主图-合并主图
+```{r}
+
+R_abundance_all+Shannon_Bac
+save_pdf("03.figure/02.microbiome_analysis/M_Bac_1.pdf",height = 3.5,width = 6.5)
+
+```
+
+
+# 其他-微生物beta多样性—整体
+```{r}
+
+# Beta测试！
+# attach(Bac_S_re_rh)
+# LorMe04::structure_plot(plotprefix = "Bac_S_re_rh",inputframe = Bac_S_re_rh,inputformat = 2,groupframe = Group_rh,treatlocation = 5)
+# P1 <- Bac_S_re_rh_PCA
+# P2 <- Bac_S_re_rh_PCOA+geom_text_repel(aes(label = ID),show.legend = F)
+# P3 <- Bac_S_re_rh_NMDS+geom_text_repel(aes(label = ID),show.legend = F)
+# 
+# LorMe04::structure_plot(plotprefix = "Bac_S_re_st",inputframe = Bac_S_re_st,inputformat = 2,groupframe = Group_rh,treatlocation = 5)
+# P1 <- Bac_S_re_st_PCA
+# P2 <- Bac_S_re_st_PCOA+geom_text_repel(aes(label = ID),show.legend = F)
+# P3 <- Bac_S_re_st_NMDS+geom_text_repel(aes(label = ID),show.legend = F)
+# 
+# LorMe04::structure_plot(plotprefix = "Bac_S_re",inputframe = Bac_S_re,inputformat = 2,groupframe = Group,treatlocation = 5)
+# P1 <- Bac_S_re_st_PCA
+# P2 <- Bac_S_re_st_PCOA+geom_text_repel(aes(label = ID),show.legend = F)
+# P3 <- Bac_S_re_st_NMDS+geom_text_repel(aes(label = ID),show.legend = F)
+
+
+
+attach(Group_rh)
+attach(Bac_S_re_rh)
+# Treat1 <- unique(Group[which(Group$State!="None"),]$Rep1)
+Treat1 <- unique(Group[which(Group$State!="None"),]$Rep2)
+P_r_data <- data.frame(stringsAsFactors = F)
+for (i in 1:length(Treat1)) {
+  keyword <- Treat1[i]
+  ID <-  Group[which(Group$Rep2 %in% keyword ),]$ID
+  Group_1 <- Group[which(Group$ID %in% ID ),]
+  Bac_1 <- Bac_S_re %>% dplyr::select(ID,all_of(ID)) %>% rownames_zyz(input = .,transform = T)
+  result <- adonis(Bac_1~State, data=Group_1, permutations = 999, method="bray")
+  r_square <- result$aov.tab$R2[1] %>% as.numeric()
+  p_value <- result$aov.tab$`Pr(>F)`[1] %>% as.numeric()
+  P_r_temp <- data.frame(Treat=keyword,r_square=r_square,p_value=p_value)
+  P_r_data <- rbind(P_r_data,P_r_temp)
+}
+
+for (i in 1:nrow(P_r_data)) {
+  if (P_r_data[i,3]>0.05) {
+    P_r_data[i,4]="p_value > 0.05"
+  }else{
+    P_r_data[i,4]="p_value ≤ 0.05"
+  }
+}
+colnames(P_r_data)[4] <- "P_state"
+
+temp_Group <- Group %>% dplyr::select(City,Source,Rep2) %>% unique()
+P_r_data <- left_join(P_r_data,temp_Group,by=c("Treat"="Rep2"))
+
+
+ggplot(P_r_data,aes(x = P_state,y = r_square,color=P_state))+
+  geom_boxplot(show.legend = F)+
+  theme_jgfbw()+
+  geom_point(size=3,alpha=.6,show.legend = F)+
+  facet_wrap(~Source)+
+  xlab("")
+
+P_r_data_rh <- P_r_data %>% filter(Source=="Rhizosphere")
+P_r_data_st <- P_r_data %>% filter(Source=="Stem")
+
+
+
+adonis_Bac_rh <- ggplot(data = P_r_data_rh,aes(x= P_state,y = r_square,color=P_state))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=1,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  # scale_y_continuous(labels = scales::percent) +
+  xlab("")+ylab("R^2 of adonis")
+adonis_Bac_rh
+
+
+```
+
+# 主图-微生物beta多样性蜘蛛图
+```{r}
+#___根际_____________________
+
+# 配置颜色
+Group_rh$State=factor(Group_rh$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+
+
+
+attach(Bac_S_re_rh)
+#计算hellinger标准化的数据
+Bac_S_re_rh_hellinger = decostand(rownames_zyz(Bac_S_re_rh,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "Bac_S_re_rh",inputframe = Bac_S_re_rh,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+Bac_S_re_rh_PCA
+adonis = adonis2(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+LorMe04::structure_plot(plotprefix = "Bac_S_re",inputframe = Bac_S_re,inputformat = 2,groupframe = Group,treatlocation = 8)
+Bac_S_re_rh_PCA
+Bac_S_re_PCAframe
+adonis = adonis2(rownames_zyz(Bac_S_re,transform = T)~Group$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+# 基于structure_polt获取的结果
+# 需要data.pca，计算坐标轴的解释度
+# 需要PCAframe，计算点的位置
+# 需要Group，用于分面的计算
+# attach(data.pca)
+# attach(Bac_S_re_rh_PCAframe)
+# attach(Group_rh)
+
+
+spider_PCA <- function(data.pac,PCAframe,Group,Treatment,abundance){
+  pca1 <- paste0("PC1:",round(summary(data.pca)$importance[2,1],4)*100,"%")
+  pca2 <- paste0("PC2:",round(summary(data.pca)$importance[2,2],4)*100,"%")
+  #get the first 4 axis for PCA,用于二维，三维图片绘制
+  scrs = as.data.frame(PCAframe)[1:4] #get the first 4 axis for PCoA
+  names(scrs) = c('PCA1', 'PCA2','PCA3','PCA4')# 可作物2d,3d，依次为xyz轴
+  # 组合排序坐标和分组信息 
+  colnumber <- which(colnames(Group)==Treatment)
+  scrs <- cbind(as.data.frame(scrs), Group=Group[,colnumber] )
+  # 求均值作为点的中心
+  cent <- aggregate(cbind(PCA1, PCA2) ~ Group, data = scrs, FUN = mean)
+  # 合并到样本坐标数据中
+  segs <- merge(scrs, setNames(cent, c('Group','oPCA1','oPCA2')),by = 'Group', sort = FALSE)
+  # lable标签
+  adonis = adonis(rownames_zyz(abundance,transform = T)~Group[,colnumber] ,permutations = 999, distance = 'bray')
+  print(adonis)
+  adonis_R2 <-adonis$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  R2 <- paste0("adonis R^2=",adonis_R2)
+  P <- paste0("adonis P=",adonis_P)
+  R2P <- paste0(R2,"\n",P)
+  assign("pca1",pca1,envir=.GlobalEnv)
+  assign("pca2",pca2,envir=.GlobalEnv)
+  assign("scrs",scrs,envir=.GlobalEnv)
+  assign("segs",segs,envir=.GlobalEnv)
+  assign("cent",cent,envir=.GlobalEnv)
+  assign("adonis_R2",adonis_R2,envir=.GlobalEnv)
+  assign("adonis_P",adonis_P,envir=.GlobalEnv)
+  assign("R2",R2,envir=.GlobalEnv)
+  assign("P",P,envir=.GlobalEnv)
+  assign("R2P",R2P,envir=.GlobalEnv)
+}
+spider_PCOA <- function(data.pcoa,PCOAframe,Group,Treatment,abundance){
+  pcoa1 <- paste0("PCOA1:",round(100 * data.pcoa$values[1,2],2),"%")#两位小数；第一轴解释量
+  pcoa2 <- paste0("PCOA2:",round(100 * data.pcoa$values[2,2],2),"%")#两位小数；第二轴解释量
+  #get the first 4 axis for PCA,用于二维，三维图片绘制
+  scrs = as.data.frame(PCOAframe)[1:2] #get the first 4 axis for PCoA
+  names(scrs) = c('PCOA1', 'PCOA2')# 可作物2d,3d，依次为xyz轴
+  # 组合排序坐标和分组信息 
+  colnumber <- which(colnames(Group)==Treatment)
+  scrs <- cbind(as.data.frame(scrs), Group=Group[,colnumber] )
+  # colnames(scrs)[3] <- "Group"
+  # 求均值作为点的中心
+  cent <- aggregate(cbind(PCOA1, PCOA2) ~ Group, data = scrs, FUN = mean)
+  # 合并到样本坐标数据中
+  segs <- merge(scrs, setNames(cent, c('Group','oPCOA1','oPCOA2')),by = 'Group', sort = FALSE)
+  # lable标签
+  adonis = adonis(rownames_zyz(abundance,transform = T)~Group[,colnumber] ,permutations = 999, distance = 'bray')
+  print(adonis)
+  adonis_R2 <-adonis$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  R2 <- paste0("adonis R^2=",adonis_R2)
+  P <- paste0("adonis P=",adonis_P)
+  R2P <- paste0(R2,"\n",P)
+  assign("pcoa1",pcoa1,envir=.GlobalEnv)
+  assign("pcoa2",pcoa2,envir=.GlobalEnv)
+  assign("scrs",scrs,envir=.GlobalEnv)
+  assign("segs",segs,envir=.GlobalEnv)
+  assign("cent",cent,envir=.GlobalEnv)
+  assign("adonis_R2",adonis_R2,envir=.GlobalEnv)
+  assign("adonis_P",adonis_P,envir=.GlobalEnv)
+  assign("R2",R2,envir=.GlobalEnv)
+  assign("P",P,envir=.GlobalEnv)
+  assign("R2P",R2P,envir=.GlobalEnv)
+}
+
+
+# 可视化
+spider_PCOA(data.pcoa = PCOA,PCOAframe = Bac_S_re_rh_PCOAframe,Group = Group_rh,Treatment = "State",abundance = Bac_S_re_rh)
+beta_Bac_rh <- ggplot(scrs, aes(PCOA1, PCOA2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCOA1, yend = oPCOA2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =max(scrs$PCA1)-120, y = max(scrs$PCA2)-100, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.1))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pcoa1, y = pcoa2)#,title="bray_curtis PCoA"
+beta_Bac_rh
+
+# 可视化
+spider_PCA(data.pac = data.pca,PCAframe = Bac_S_re_rh_PCAframe,Group = Group_rh,Treatment = "State",abundance = Bac_S_re_rh)
+beta_Bac_rh <- ggplot(scrs, aes(PCA1, PCA2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCA1, yend = oPCA2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =max(scrs$PCA1)-120, y = max(scrs$PCA2)-100, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.9))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pca1, y = pca2)#,title="bray_curtis PCoA"
+beta_Bac_rh
+save_pdf("03.figure/02.microbiome_analysis/Bac_PCA_rh.pdf",height = 3,width = 3)
+
+
+# 绘制解释度图片
+attach(scrs)
+Group_pca <- left_join(Group,rownames_zyz(scrs,transform = F,cbindrowname = T)) %>% na.omit()
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+rh_pca1 <- ggplot(data = Group_pca,aes(x= State,y = PCA1,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")+
+  coord_flip()
+rh_pca1
+
+rh_pca2 <- ggplot(data = Group_pca,aes(x= State,y = PCA2,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  # scale_y_continuous(labels = scales::percent) +
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",label = "p.format" ,bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.title.y=element_blank(), axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")
+rh_pca2
+
+
+
+
+{
+  adonis_State = adonis(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+  adonis_City = adonis(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$City ,permutations = 999, distance = 'bray')
+  adonis_City_State = adonis(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$City+Group_rh$State ,permutations = 999, distance = 'bray')
+  
+  adonis_R2 <-adonis_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_2 <-adonis_City$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_2 <- adonis_City$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_3 <-adonis_City_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_3 <- adonis_City_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  
+  adonis_df1 <- data.frame(Treat="State",R2=adonis_R2,P=adonis_P)
+  adonis_df2 <- data.frame(Treat="City",R2=adonis_R2_2,P=adonis_P_2)
+  adonis_df3 <- data.frame(Treat="State:City",R2=adonis_R2_3,P=adonis_P_3)
+  adonis_df <- rbind(adonis_df1,adonis_df2,adonis_df3)
+  adonis_df$Treat2 <- paste0(adonis_df$Treat," (p=",adonis_df$P,")")
+}
+adonis_df
+
+adonis <- ggplot(data = adonis_df,aes(x = Treat2,y = R2))+
+  geom_col(fill=color_zyz3[1],width = .2)+
+  theme_jgf()+
+  # scale_y_continuous(labels = scales::percent) +
+  xlab("")+ylab("Interpretability")+
+  scale_x_discrete(guide = guide_axis(position = "right")) + 
+  scale_y_continuous(guide = guide_axis(position = "top"))+
+  coord_flip()
+adonis
+
+adonis <- ggplot(data = adonis_df, aes(x = Treat2, y = R2)) +
+  geom_col(fill = color_zyz3[1], width = .25) +
+  theme_jgf() +
+  xlab("") + ylab("Interpretability") +
+  scale_x_discrete(guide = guide_axis(position = "right")) +
+  scale_y_continuous(
+    breaks = c(0, 0.30),
+    labels = c("0", "0.3"),
+    expand = expansion(mult = c(0, 0.05)),
+    guide = guide_axis(position = "top")
+  ) +
+  coord_flip()
+adonis
+
+
+temp1 <- (rh_pca1|adonis)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+temp2 <- (beta_Bac_rh|rh_pca2)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+(temp1/temp2)+ plot_layout(heights = c(1,4))+theme(plot.margin=unit(rep(0,4),'lines'))
+
+save_pdf("03.figure/02.microbiome_analysis/PCA_BacAll_rh.pdf",width = 5.5,height = 4.5)
+
+#___茎部_____________________
+
+
+Group_st$State=factor(Group_st$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+attach(Bac_S_re_st)
+#计算hellinger标准化的数据
+Bac_S_re_st_hellinger = decostand(rownames_zyz(Bac_S_re_st,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "Bac_S_re_st",inputframe = Bac_S_re_st,inputformat = 2,groupframe = Group_st,treatlocation = 8)
+Bac_S_re_st_PCA
+adonis = adonis(rownames_zyz(Bac_S_re_st,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+LorMe04::structure_plot(plotprefix = "Bac_S_re",inputframe = Bac_S_re,inputformat = 2,groupframe = Group,treatlocation = 8)
+Bac_S_re_st_PCA
+Bac_S_re_PCAframe
+adonis = adonis(rownames_zyz(Bac_S_re,transform = T)~Group$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+spider_PCA(data.pac = data.pca,PCAframe = Bac_S_re_st_PCAframe,Group = Group_st,Treatment = "State",abundance = Bac_S_re_st)
+
+# 可视化
+beta_Bac_st <- ggplot(scrs, aes(PCA1, PCA2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCA1, yend = oPCA2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =max(scrs$PCA1)-70, y = max(scrs$PCA2)-50, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.9))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pca1, y = pca2)#,title="bray_curtis PCoA"
+beta_Bac_st
+save_pdf("03.figure/02.microbiome_analysis/Bac_PCA_st.pdf",height = 3,width = 3)
+
+
+# 绘制解释度图片
+attach(scrs)
+Group_pca <- left_join(Group,rownames_zyz(scrs,transform = F,cbindrowname = T)) %>% na.omit()
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+st_pca1 <- ggplot(data = Group_pca,aes(x= State,y = PCA1,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")+
+  coord_flip()
+st_pca1
+
+st_pca2 <- ggplot(data = Group_pca,aes(x= State,y = PCA2,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  # scale_y_continuous(labels = scales::percent) +
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",label = "p.format" ,bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.title.y=element_blank(), axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")
+st_pca2
+
+
+{
+  adonis_State = adonis(rownames_zyz(Bac_S_re_st,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+  adonis_City = adonis(rownames_zyz(Bac_S_re_st,transform = T)~Group_st$City ,permutations = 999, distance = 'bray')
+  adonis_City_State = adonis(rownames_zyz(Bac_S_re_st,transform = T)~Group_st$City+Group_st$State ,permutations = 999, distance = 'bray')
+  
+  adonis_R2 <-adonis_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_2 <-adonis_City$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_2 <- adonis_City$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_3 <-adonis_City_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_3 <- adonis_City_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  
+  adonis_df1 <- data.frame(Treat="State",R2=adonis_R2,P=adonis_P)
+  adonis_df2 <- data.frame(Treat="City",R2=adonis_R2_2,P=adonis_P_2)
+  adonis_df3 <- data.frame(Treat="State:City",R2=adonis_R2_3,P=adonis_P_3)
+  adonis_df <- rbind(adonis_df1,adonis_df2,adonis_df3)
+  adonis_df$Treat2 <- paste0(adonis_df$Treat," (p=",adonis_df$P,")")
+}
+adonis_df
+
+adonis <- ggplot(data = adonis_df, aes(x = Treat2, y = R2)) +
+  geom_col(fill = color_zyz3[1], width = .25) +
+  theme_jgf() +
+  xlab("") + ylab("Interpretability") +
+  scale_x_discrete(guide = guide_axis(position = "right")) +
+  scale_y_continuous(
+    breaks = c(0, 0.15, 0.30),
+    labels = c("0.0", "0.15", "0.30"),
+    expand = expansion(mult = c(0, 0.05)),
+    guide = guide_axis(position = "top")
+  ) +
+  coord_flip()
+adonis
+
+adonis <- ggplot(data = adonis_df, aes(x = Treat2, y = R2)) +
+  geom_col(fill = color_zyz3[1], width = .25) +
+  theme_jgf() +
+  xlab("") + ylab("Interpretability") +
+  scale_x_discrete(guide = guide_axis(position = "right")) +
+  scale_y_continuous(
+    breaks = c(0, 0.30),
+    labels = c("0", "0.3"),
+    expand = expansion(mult = c(0, 0.05)),
+    guide = guide_axis(position = "top")
+  ) +
+  coord_flip()
+adonis
+
+temp1 <- (st_pca1|adonis)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+temp2 <- (beta_Bac_st|st_pca2)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+(temp1/temp2)+ plot_layout(heights = c(1,4))+theme(plot.margin=unit(rep(0,4),'lines'))
+save_pdf("03.figure/02.microbiome_analysis/PCA_BacAll_st.pdf",width = 5.5,height = 4.5)
+
+```
+
+
+```{r stale_pcoa_draft, eval=FALSE, purl=FALSE}
+
+# Historical draft retained for provenance only. It refers to PCOAresult, which
+# is not constructed in this section, and does not contribute a saved result.
+
+
+
+
+Bac_S_re_st_PCOAframe
+Bac_S_re_st_PCOA
+PCOA$values[1,2]
+
+PCOA$values
+# 坐标轴解释量（前两轴）
+
+pco1 = round(100 * PCOAresult$values[1,2],2)#两位小数；第一轴解释量
+pco2 = round(100 * PCOAresult$values[2,2],2)#两位小数；第二轴解释量
+#vector包含coordinate string的结果和样品信息
+scrs = as.data.frame(PCOAresult$vectors)[1:4] #get the first 4 axis for PCoA
+#更改PCoA名字
+names(scrs) = c('PCo1', 'PCo2','PCo3','PCo4')# 可作物2d,3d，依次为xyz轴
+# 组合排序坐标和分组信息 
+scrs <- cbind(as.data.frame(scrs), Group= Group$State )
+# 求均值
+cent <- aggregate(cbind(PCo1, PCo2) ~ Group, data = scrs, FUN = mean)
+# 合并到样本坐标数据中
+segs <- merge(scrs, setNames(cent, c('Group','oPCo1','oPCo2')),by = 'Group', sort = FALSE)
+# lable标签
+adonis_R2 <-adonis$aov.tab$R2[1] %>% round(.,2)
+adonis_P <- adonis$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+R2 <- paste0("adonis R^2=",adonis_R2)
+P <- paste0("adonis P=",adonis_P)
+R2P <- paste0(R2,"\n",P)
+
+# 可视化
+beta_Bac <- ggplot(scrs, aes(PCo1, PCo2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCo1, yend = oPCo2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =min(scrs$PCo1)+0.07, y = max(scrs$PCo2)-0.02, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.1))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pca1, y = pca2)#,title="bray_curtis PCoA"
+
+beta_Bac
+
+
+
+
+
+
+
+
+
+
+LorMe04::structure_plot(plotprefix = "Bac_S_re_rh_hellinger",inputframe = Bac_S_re_rh_hellinger,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+Bac_S_re_rh_hellinger_PCA
+
+
+
+
+
+
+
+
+LorMe04::structure_plot(plotprefix = "Bac_S_re_rh",inputframe = Bac_S_re_rh_hellinger,inputformat = 2,groupframe = Group_rh,treatlocation = 5)
+Bac_S_re_rh_PCA
+Bac_S_re_rh_data.PCA
+
+attach(Group_rh)
+# ——————————————————————————————————————————————————————————————————————————————————
+# 固定处理的颜色和顺序
+# Group_rh_melt$State=factor(Group_rh_melt$State,levels = c("Natural State","Inoculation Rs"))
+Group_rh$State=factor(Group_rh$State,labels =c("Healthy","Diseased"))
+Group_rh$State=factor(Group_rh$State,levels =c("Healthy","Diseased"))
+zyz_cols <- c("#35A132","#E01516") 
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+# ——————————————————————————————————————————————————————————————————————————————————
+# ###################################ARGsbeta多样性分析######################################
+# anosim分析
+attach(Bac_S_re_rh)
+# 使用bray距离，不标准化
+# PCA
+PCAresult<- Dimension_reduction(inputframe = rownames_zyz(Bac_S_re_rh_hellinger),group =Group_rh[,c(6,8)],format=1 )
+PCAframe<- as.data.frame(PCAresult[1]) %>% .[,c(1:2)] ##extract data for visualization
+PCAframe$sampleID <- rownames(PCAframe) 
+Group_rh <- left_join(Group_rh,PCAframe,by=c("ID"="sampleID"))
+# PCOA
+PCOAresult<-Dimension_reduction(inputframe =rownames_zyz(Bac_S_re_rh),group =Group_rh[,c(6,8)],format=2)
+PCOAframe<- as.data.frame(PCOAresult[1]) %>% .[,c(1:2)] ##extract data for visualization
+colnames(PCOAframe) <- c("PCOA1","PCOA2")
+PCOAframe$sampleID <- rownames(PCOAframe) 
+PCOAresult$value[,2] ###explanation of axis 解释度要额外输出！##
+
+# ——————————————————————————————————————————————————————————————————————————————————
+# ###################################Microbbeta多样性分析######################################
+# anosim分析
+set.seed(6)
+anosim_result <- anosim(rownames_zyz(Bac_S_re_rh,transform = T), Group_rh$State, distance = 'bray', permutations = 999)
+summary(anosim_result)
+names(anosim_result)
+anosim_result$signif      #p 值
+anosim_result$statistic   #R 值
+plot(anosim_result, col = c('gray', 'red', 'green', 'blue', 'orange', 'purple'))
+# adonis
+set.seed(6)
+
+adonis = adonis(rownames_zyz(Bac_S_re_rh_hellinger,transform = T)~Group_rh$State,data =Bac_S_re_rh ,permutations = 999, distance = 'bray')
+print(adonis)
+# 不进行hellinher转换的数据
+adonis = adonis(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+
+# PCA分析
+Microb_beta <- Dimension_reduction(inputframe = rownames_zyz(Bac_S_re_rh_hellinger),group = Group_rh[,c(6:8)],format =1 )
+library(ggplot2)
+ggplot(data=PCAframe,aes(x =PCAframe[,1],y=PCAframe[,2],color=factor(State))) +
+  geom_point(size=3) +
+  #geom_text(aes(label=rownames(PCAframe)),size=3,vjust=-1)+  #show sample ID##
+  labs(x=paste0("PC1:",round(summary(data.pca)$importance[2,1],4)*100,"%"),y=paste0("PC2:",round(summary(data.pca)$importance[2,2],4)*100,"%"),title="PCA",color="Treatment") +
+  geom_hline(yintercept=0,linetype=4,color="grey") +
+  stat_ellipse(level=0.95)+
+  # stat_ellipse(aes(color=Group_rh$`Location ID`),level=0.95)+
+  geom_vline(xintercept=0,linetype=4,color="grey")+
+  theme_bw()
+# PCOA分析
+###PCOA###
+PCOAresult<-Dimension_reduction(rownames_zyz(Bac_S_re_rh),group = Group_rh[,c(3:9)],format =2)
+PCOAframe<- as.data.frame(PCOAresult[1]) ##extract data for visualization
+PCOAresult$value[,2] ###explanation of axis##
+# 坐标轴解释量（前两轴）
+pco1 = round(100 * PCOAresult$values[1,2],2)#两位小数；第一轴解释量
+pco2 = round(100 * PCOAresult$values[2,2],2)#两位小数；第二轴解释量
+#vector包含coordinate string的结果和样品信息
+scrs = as.data.frame(PCOAresult$outframe)[1:4] #get the first 4 axis for PCoA
+#更改PCoA名字
+names(scrs) = c('PCo1', 'PCo2','PCo3','PCo4')# 可作物2d,3d，依次为xyz轴
+# 组合排序坐标和分组信息 
+scrs <- cbind(as.data.frame(scrs), Group=  Group_rh$State )
+# 求均值
+cent <- aggregate(cbind(PCo1, PCo2) ~ Group, data = scrs, FUN = mean)
+# 合并到样本坐标数据中
+segs <- merge(scrs, setNames(cent, c('Group','oPCo1','oPCo2')),by = 'Group', sort = FALSE)
+# lable标签
+adonis_R2 <-adonis$aov.tab$R2[1] %>% round(.,2)
+adonis_P <- adonis$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+R2 <- paste0("adonis R^2=",adonis_R2)
+P <- paste0("adonis P=",adonis_P)
+R2P <- paste0(R2,"\n",P)
+# 可视化
+beta_Bac <- ggplot(scrs, aes(PCo1, PCo2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCo1, yend = oPCo2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =min(scrs$PCo1)+0.07, y = max(scrs$PCo2)-0.02, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.1))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = paste0('PCo1: ',pco1, '%'), y = paste0('PCo2: ',pco2, '%'))#,title="bray_curtis PCoA"
+
+beta_Bac
+
+
+
+
+```
+
+
+
+# 筛选出携带微生物的
+```{r}
+
+
+# 筛选高丰度ARG携带物种
+attach(ARG_ppm_source_ab_S)
+attach(ARG_ppm_source_ab_S_rh)
+attach(ARG_ppm_source_ab_S_st)
+
+threshold <- 0
+{
+  ARG_ppm_source_ab_S_rh_fil <-  LorMe04::Filter_function(input = ARG_ppm_source_ab_S_rh,threshold = threshold,format = 4,outformat = 1)
+  ARG_ppm_source_ab_S_st_fil <-  LorMe04::Filter_function(input = ARG_ppm_source_ab_S_st,threshold = threshold,format = 4,outformat = 1)
+  Bac_S_re_rh_ARG <- Bac_S_re_rh[which(Bac_S_re_rh$ID %in% ARG_ppm_source_ab_S_rh_fil$ID),]
+  Bac_S_re_st_ARG <- Bac_S_re_st[which(Bac_S_re_st$ID %in% ARG_ppm_source_ab_S_rh_fil$ID),]
+}
+
+adonis = adonis2(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+adonis2 = adonis2(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$City ,permutations = 999, distance = 'bray')
+print(adonis)
+print(adonis2)
+
+adonis = adonis2(rownames_zyz(Bac_S_re_rh_ARG,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+adonis2 = adonis2(rownames_zyz(Bac_S_re_rh_ARG,transform = T)~Group_rh$City ,permutations = 999, distance = 'bray')
+print(adonis)
+print(adonis2)
+
+adonis = adonis2(rownames_zyz(Bac_S_re_st,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+adonis2 = adonis2(rownames_zyz(Bac_S_re_st,transform = T)~Group_st$City ,permutations = 999, distance = 'bray')
+print(adonis)
+print(adonis2)
+
+
+adonis = adonis2(rownames_zyz(Bac_S_re_st_ARG,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+adonis2 = adonis2(rownames_zyz(Bac_S_re_st_ARG,transform = T)~Group_st$City ,permutations = 999, distance = 'bray')
+print(adonis)
+print(adonis2)
+
+
+
+Group_rh$State=factor(Group_rh$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+attach(Bac_S_re_rh)
+
+
+Group_rh$State=factor(Group_rh$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+attach(Bac_S_re_rh)
+
+
+
+#计算hellinger标准化的数据
+Bac_S_re_rh_ARG_hellinger = decostand(rownames_zyz(Bac_S_re_rh_ARG,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "Bac_S_re_rh_ARG",inputframe = Bac_S_re_rh_ARG,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+Bac_S_re_rh_ARG_PCA
+adonis = adonis(rownames_zyz(Bac_S_re_rh_ARG,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+adonis2 = adonis(rownames_zyz(Bac_S_re_rh_ARG,transform = T)~Group_rh$City ,permutations = 999, distance = 'bray')
+print(adonis)
+print(adonis2)
+
+Bac_S_re_st_ARG_hellinger = decostand(rownames_zyz(Bac_S_re_st_ARG,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "Bac_S_re_st_ARG",inputframe = Bac_S_re_st_ARG,inputformat = 2,groupframe = Group_st,treatlocation = 8)
+Bac_S_re_st_ARG_PCA
+adonis = adonis(rownames_zyz(Bac_S_re_st_ARG,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+adonis2 = adonis(rownames_zyz(Bac_S_re_st_ARG,transform = T)~Group_st$City ,permutations = 999, distance = 'bray')
+print(adonis)
+print(adonis2)
+
+
+Bac_S_re_rh_hellinger = decostand(rownames_zyz(Bac_S_re_rh,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "Bac_S_re_rh",inputframe = Bac_S_re_rh,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+Bac_S_re_rh_PCA
+adonis = adonis(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+adonis2 = adonis(rownames_zyz(Bac_S_re_rh,transform = T)~Group_rh$City ,permutations = 999, distance = 'bray')
+print(adonis)
+print(adonis2)
+
+
+
+
+```
+
+
+
+# 微生物beta多样性—City
+```{r}
+City_all <- unique(Group_rh$City)
+for (i in 1:length(City_all)) {
+  City <- City_all[i]
+  Group_select <- Group_rh[which(Group_rh$City %in% City ),]
+  if (nrow(Group_select) < 3L) {
+    message(sprintf("Skipping %s: %d samples cannot support a two-axis ordination.", City, nrow(Group_select)))
+    next
+  }
+  Bac_select <-  Bac_S_re %>% dplyr::select(ID,all_of(Group_select$ID))
+  plotprefix <- paste0("Bac_S_re","_",City)
+  ggsaveprefix1 <- paste0(plotprefix,"_PCA")
+  ggsaveprefix2 <- paste0(plotprefix,"_PCOA")
+  
+  filename1 <- paste0("03.figure/02.microbiome_analysis/",ggsaveprefix1,".pdf")
+  filename2 <- paste0("03.figure/02.microbiome_analysis/",ggsaveprefix2,".pdf")
+  # Bac_select is already limited to one city; compare disease state within
+  # that city rather than passing the single-level City column to PCoA.
+  LorMe04::structure_plot(plotprefix = "Bac_S_re",inputframe = Bac_select,inputformat = 2,groupframe = Group_select,treatlocation = 8)
+  save_pdf(filename = filename1,plot = Bac_S_re_PCA,width = 4,height = 4)
+  save_pdf(filename = filename2,plot = Bac_S_re_PCOA,width = 4,height = 4)
+}
+
+```
+
+# 微生物互作网络
+```{r}
+
+# Curated co-occurrence networks: keep a main genus view and a stricter
+# supplementary species view.  This replaces the legacy all-taxa display
+# blocks below, which can create tens of thousands of non-interpretable edges.
+network_specs <- list(
+  Genus_rh = list(input = Bac_G_re_rh, prevalence_min = 20, top_n = 60,
+                  rho_min = 0.60, fdr_alpha = 0.05, max_edges = 150),
+  Species_rh = list(input = Bac_S_re_rh, prevalence_min = 20, top_n = 50,
+                    rho_min = 0.70, fdr_alpha = 0.05, max_edges = 120)
+)
+for (network_name in names(network_specs)) {
+  spec <- network_specs[[network_name]]
+  network_result <- build_sparse_correlation_network(
+    inputframe = spec$input,
+    prevalence_min = spec$prevalence_min,
+    top_n = spec$top_n,
+    rho_min = spec$rho_min,
+    fdr_alpha = spec$fdr_alpha,
+    max_edges = spec$max_edges
+  )
+  save_pdf(
+    filename = paste0("03.figure/02.microbiome_analysis/S_", network_name, "_network.pdf"),
+    plot = network_result$plot,
+    width = 8,
+    height = 7
+  )
+  table_dir <- "04.datasave/network/02.microbiome_analysis"
+  save_tsv(network_result$nodes, file = paste0(table_dir, "/S_", network_name, "_nodes.tsv"))
+  save_tsv(network_result$edges, file = paste0(table_dir, "/S_", network_name, "_edges.tsv"))
+  save_tsv(network_result$parameters, file = paste0(table_dir, "/S_", network_name, "_parameters.tsv"))
+}
+
+```
+
+# Legacy dense network drafts (kept for provenance; excluded from batch runs)
+```{r legacy_dense_networks, eval=FALSE, purl=FALSE}
+
+attach(Bac_G_re_hrh)
+# These six calls only draw exploratory networks and do not feed any later
+# object.  The final cross-group call can exceed 200,000 edges, so keep that
+# interactive diagnostic out of non-interactive reproducible runs.
+if (interactive()) {
+  network_analysis_compat(input = Bac_G_re_hrh,inputtype = 2,n = 10,threshold = 0.9,display = T,method = "spearman")
+  network_analysis_compat(input = Bac_G_re_drh,inputtype = 2,n = 10,threshold = 0.9,display = T,method = "spearman")
+  network_analysis_compat(input = Bac_G_re_hst,inputtype = 2,n = 10,threshold = 0.9,display = T,method = "spearman")
+  network_analysis_compat(input = Bac_G_re_dst,inputtype = 2,n = 10,threshold = 0.9,display = T,method = "spearman")
+  network_analysis_compat(input = Bac_S_re_hrh,inputtype = 2,input2 = Bac_S_re_drh,input2type = 2,n = 10,threshold = 0.8,display = T,method = "spearman")
+  network_analysis_compat(input = Bac_G_re_hrh,inputtype = 2,input2 = Bac_G_re_drh,input2type = 2,n = 10,threshold = 0.6,display = T,method = "spearman")
+}
+
+
+
+# 寻找高丰度的Genus携带物种
+Top_ARG_G <- Top_taxa(ARG_ppm_source_ab_G_rh,n = 100,inputformat = 2,outformat = 1)$ID
+
+# network_analysis
+# ——————————————————————————————
+net_Bac_G_re_rh <- network_analysis_compat(input = Bac_G_re_rh,inputtype = 2,n = 20,threshold = 0.9,display = T,method = "spearman")
+
+# 构建网络：获取接临矩阵|统计量|顶点|igraph
+# ——————————————————————————————
+adjacency<-as.data.frame(net_Bac_G_re_rh[2])
+network_stat<-as.data.frame(net_Bac_G_re_rh[1])
+node<- data.frame(node = union(adjacency$source,adjacency$target));rownames(node) <- node$node
+net <- igraph::simplify(igraph::graph_from_data_frame(adjacency, directed = FALSE), remove.multiple = TRUE, remove.loops = TRUE)
+# net <- graph_from_data_frame(adjacency,direct=F,vertices = node )
+# plot(net,vertex.label=NA)
+
+# ——————————————————————————————
+# 构建模块：使用cluster_fast_greedy/fastgreedy.community算法
+cluster <- cluster_fast_greedy(net)
+# cluster <- fastgreedy.community(igraph1)
+cluster_id <- membership(cluster) 
+
+# 获取模块的统计值，并查看前10个模块
+# ——————————————————————————————
+membership(cluster) # 获取cluster的聚类内容，即modules
+t_modules <- sort(table(membership(cluster)),decr=T)
+t_modules_10 <- t_modules[1:10]
+t_modules_10_rank <- t_modules_10
+names(t_modules_10_rank) <- as.factor(1:10)
+print(t_modules_10)
+print(t_modules_10_rank)
+
+# 获取Top模块对应node的ID名称
+# ——————————————————————————————
+t_modules_points <- membership(cluster)[membership(cluster) %in% names(t_modules_10)]
+t_points <- NULL
+for(i in t_modules_points){
+  tx <- which(names(t_modules_10)==i)
+  t_points <- c(t_points, tx)
+}
+names(t_points) <- names(t_modules_points)
+point_modules_df <- data.frame(t_points)
+point_modules_df$ID <- rownames(point_modules_df)
+print(point_modules_df)
+
+# 基于select_keyword1在各个模块中的数量，决定是可视化那些模块
+# ——————————————————————————————
+select_keyword1 <- Top_ARG_G
+select_keyword1 <- ARG_ppm_source_ab_G$ID
+t_modules_sel <- table(factor(membership(cluster)[select_keyword1],levels=names(t_modules))) 
+t_modules_sel_10 <- t_modules_sel[names(t_modules_10)]
+# smcs10_plot <- t_modules_sel_10
+# names(smcs10_plot) <- as.factor(1:10)
+print(t_modules_sel_10)
+
+
+# 基于select_keyword2确定模块中包含了那些点的范围
+select_keyword2 <- ARG_ppm_source_ab_G$ID
+numbers <- c("3","4","1","5","8")
+t_mods_list_sel <- list()
+for (i in numbers){
+# for (i in names(t_modules_sel_10)){
+  # 筛选在modules的物种
+  point1 <- names(membership(cluster)[membership(cluster)==i])
+  # 筛选符合特定条件的的物种
+  point2 <- point1[point1 %in% select_keyword2]
+  # 构建mods_list
+  t_mods_list_sel[[i]] <- as.numeric(V(net)[point2])
+}
+
+t_mods_list_sel
+
+
+# 可视化设置，注意！tits_nodesizes一定要as.numeric
+# ——————————————————————————————
+
+
+
+V(net)$size <- 1
+
+V(net)$frame.color <- NA
+
+V(net)$color <- V(net)$name
+V(net)$color[V(net)$color %in% ARG_ppm_source_ab_G$ID] <- "ARG host"
+V(net)$color[!V(net)$color %in% "ARG host"] <- "others"
+V(net)$color[V(net)$color == "ARG host" ]    <- "#FF6347"
+V(net)$color[V(net)$color == "others" ]    <- "#005755"
+
+V(net)$size <- V(net)$name
+V(net)$size[V(net)$size %in% Top_ARG_G] <- 6
+V(net)$size[!V(net)$size %in% 5] <-3 
+
+
+tits_nodesizes <- as.numeric(V(net)$size);unique(tits_nodesizes)
+if (interactive()) coords_t_its <- layout_(net,with_fr(niter=9999, grid="nogrid"))
+t_cols <- c("antiquewhite","antiquewhite3","gray50","#7FFFD4","#87CEFA","#D8BFD8","#FFF0F5")
+t_cols2 <- c("#FF6347","#005755")
+
+set.seed(333)
+if (interactive()) {
+  plot(net,
+       vertex.label=NA, 
+       layout=coords_t_its,
+       vertex.size=tits_nodesizes,
+       mark.groups=t_mods_list_sel,
+       mark.border=t_cols,
+       mark.col=t_cols)
+  legend("right",legend=c("Module 3","Module 4", "Module 1","Module 5","Module 8"),col=t_cols,
+         bty="n",fill=t_cols,border=t_cols)
+  legend("left",legend=c("Up","Down"),col=t_cols2,
+         bty="n",fill=t_cols2,border=t_cols2)
+}
+
+
+
+temp <- colSums(ARG_ppm_type_ab[,-1]) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(temp)[2] <- "abundance"
+Group_type_sum <- left_join(Group,temp,by = "ID")
+Group_type_sum$State=factor(Group_type_sum$State,levels =c("None","Healthy","Diseased"))
+
+
+attach(point_modules_df)
+attach(ARG_ppm_source_ab_G_rh)
+modules_ARG <- left_join(point_modules_df,ARG_ppm_source_ab_G_rh) %>% na.omit() %>% .[,-2]
+modules_ARG2 <- aggregate(modules_ARG[,-1], by=list(modules_ARG[,1]),FUN = sum) %>% rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T)
+colnames(modules_ARG2)[1] <- "ID"
+colnames(modules_ARG2) <- c("ID",paste0("ARG_",colnames(modules_ARG2)[-1]))
+final <- left_join(Group_rh,modules_ARG2)
+final_melt <- melt(final, measure.vars = grep("^ARG_", names(final), value = TRUE))
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+modules_ARG_plot <- ggplot(data = final_melt,aes(x= State,y = value,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~variable,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Bacteria Shannon")
+modules_ARG_plot
+
+
+
+
+modules_Bac <- left_join(point_modules_df,Bac_G_re) %>% na.omit() %>% .[,-2]
+modules_Bac2 <- aggregate(modules_Bac[,-1], by=list(modules_Bac[,1]),FUN = sum) %>% rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T)
+colnames(modules_Bac2) <- c("ID",paste0("Bac_",colnames(modules_Bac2)[-1]))
+final <- left_join(Group_rh,modules_Bac2)
+final_melt <- melt(final, measure.vars = grep("^Bac_", names(final), value = TRUE))
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+modules_Bac_plot <- ggplot(data = final_melt,aes(x= State,y = value,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~variable,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Bacteria Shannon")
+modules_Bac_plot
+
+
+final <- left_join(Group_rh,modules_Bac2) %>% left_join(.,modules_ARG2) %>% left_join(.,Group_type_sum)
+final_melt <- melt(final, measure.vars = grep("^(Bac_|ARG_)", names(final), value = TRUE))
+ggplot(final_melt,aes(x = final_melt$value,y = abundance))+
+  geom_point()+
+  facet_wrap(~variable,scales = "free")+
+  geom_smooth(method = 'lm',size=1)+
+  stat_cor(show.legend = F,digits = .1)+
+  theme_jgf()
+  # labs(x="Relative abundance of Rs" ,y="Relative abundance of Module")
+
+```
+
+# 微生物互作网络Species水平
+## 健康和发病网络
+```{r legacy_species_networks, eval=FALSE, purl=FALSE}
+
+# 寻找高丰度的Genus携带物种
+Top_ARG_S <- Top_taxa(ARG_ppm_source_ab_S_rh,n = 100,inputformat = 2,outformat = 1)$ID
+# network_analysis
+# ——————————————————————————————
+net_Bac_S_re_hrh <- network_analysis_compat(input = Bac_S_re_hrh,inputtype = 2,n = 20,threshold = 0.9,display = T,method = "spearman")
+
+# 构建网络：获取接临矩阵|统计量|顶点|igraph
+# ——————————————————————————————
+adjacency<-as.data.frame(net_Bac_S_re_hrh[2])
+network_stat<-as.data.frame(net_Bac_S_re_hrh[1])
+node<- data.frame(node = union(adjacency$source,adjacency$target));rownames(node) <- node$node
+net <- igraph::simplify(igraph::graph_from_data_frame(adjacency, directed = FALSE), remove.multiple = TRUE, remove.loops = TRUE)
+# net <- graph_from_data_frame(adjacency,direct=F,vertices = node )
+# plot(net,vertex.label=NA)
+
+# ——————————————————————————————
+# 构建模块：使用cluster_fast_greedy/fastgreedy.community算法
+cluster <- cluster_fast_greedy(net)
+# cluster <- fastgreedy.community(igraph1)
+cluster_id <- membership(cluster) 
+
+# 获取模块的统计值，并查看前10个模块
+# ——————————————————————————————
+membership(cluster) # 获取cluster的聚类内容，即modules
+t_modules <- sort(table(membership(cluster)),decr=T)
+t_modules_10 <- t_modules[1:10]
+t_modules_10_rank <- t_modules_10
+names(t_modules_10_rank) <- as.factor(1:10)
+print(t_modules_10)
+print(t_modules_10_rank)
+
+# 获取Top模块对应node的ID名称
+# ——————————————————————————————
+t_modules_points <- membership(cluster)[membership(cluster) %in% names(t_modules_10)]
+t_points <- NULL
+for(i in t_modules_points){
+  tx <- which(names(t_modules_10)==i)
+  t_points <- c(t_points, tx)
+}
+names(t_points) <- names(t_modules_points)
+point_modules_df <- data.frame(t_points)
+point_modules_df$ID <- rownames(point_modules_df)
+print(point_modules_df)
+
+# 基于select_keyword1在各个模块中的数量，决定是可视化那些模块
+# ——————————————————————————————
+select_keyword1 <- Top_ARG_S
+select_keyword1 <- ARG_ppm_source_ab_S$ID
+t_modules_sel <- table(factor(membership(cluster)[select_keyword1],levels=names(t_modules))) 
+t_modules_sel_10 <- t_modules_sel[names(t_modules_10)]
+# smcs10_plot <- t_modules_sel_10
+# names(smcs10_plot) <- as.factor(1:10)
+print(t_modules_sel_10)
+
+
+# 基于select_keyword2确定模块中包含了那些点的范围
+select_keyword2 <- ARG_ppm_source_ab_S$ID
+numbers <- c("1","4","2","5","3","7","6","14","8","19")
+t_mods_list_sel <- list()
+for (i in numbers){
+# for (i in names(t_modules_sel_10)){
+  # 筛选在modules的物种
+  point1 <- names(membership(cluster)[membership(cluster)==i])
+  # 筛选符合特定条件的的物种
+  point2 <- point1[point1 %in% select_keyword2]
+  # 构建mods_list
+  t_mods_list_sel[[i]] <- as.numeric(V(net)[point2])
+}
+
+t_mods_list_sel
+
+
+# 可视化设置，注意！tits_nodesizes一定要as.numeric
+# ——————————————————————————————
+
+
+
+V(net)$size <- 1
+
+V(net)$frame.color <- NA
+
+V(net)$color <- V(net)$name
+V(net)$color[V(net)$color %in% ARG_ppm_source_ab_S$ID] <- "ARG host"
+V(net)$color[!V(net)$color %in% "ARG host"] <- "others"
+V(net)$color[V(net)$color == "ARG host" ]    <- "#FF6347"
+V(net)$color[V(net)$color == "others" ]    <- "#005755"
+
+V(net)$size <- V(net)$name
+V(net)$size[V(net)$size %in% Top_ARG_S] <- 10
+V(net)$size[!V(net)$size %in% 10] <-3 
+
+
+tits_nodesizes <- as.numeric(V(net)$size);unique(tits_nodesizes)
+if (interactive()) coords_t_its <- layout_(net,with_fr(niter=9999, grid="nogrid"))
+t_cols <- c("antiquewhite","antiquewhite3","gray50","#7FFFD4","#87CEFA","#D8BFD8","#FFF0F5")
+t_cols2 <- c("#FF6347","#005755")
+
+set.seed(333)
+if (interactive()) {
+  plot(net,
+       vertex.label=NA, 
+       layout=coords_t_its,
+       vertex.size=tits_nodesizes,
+       mark.groups=t_mods_list_sel,
+       mark.border=t_cols,
+       mark.col=adjustcolor(t_cols, alpha.f = .5))
+  legend("right",legend=c("Module 3","Module 4", "Module 1","Module 5","Module 8"),col=t_cols,
+         bty="n",fill=t_cols,border=t_cols)
+  legend("left",legend=c("Up","Down"),col=t_cols2,
+         bty="n",fill=t_cols2,border=t_cols2)
+}
+
+
+
+
+net_Bac_S_re_drh <- network_analysis_compat(input = Bac_S_re_drh,inputtype = 2,n = 20,threshold = 0.9,display = T,method = "spearman")
+
+# 构建网络：获取接临矩阵|统计量|顶点|igraph
+# ——————————————————————————————
+adjacency<-as.data.frame(net_Bac_S_re_drh[2])
+network_stat<-as.data.frame(net_Bac_S_re_drh[1])
+node<- data.frame(node = union(adjacency$source,adjacency$target));rownames(node) <- node$node
+net <- igraph::simplify(igraph::graph_from_data_frame(adjacency, directed = FALSE), remove.multiple = TRUE, remove.loops = TRUE)
+# net <- graph_from_data_frame(adjacency,direct=F,vertices = node )
+# plot(net,vertex.label=NA)
+
+# ——————————————————————————————
+# 构建模块：使用cluster_fast_greedy/fastgreedy.community算法
+cluster <- cluster_fast_greedy(net)
+# cluster <- fastgreedy.community(igraph1)
+cluster_id <- membership(cluster) 
+
+# 获取模块的统计值，并查看前10个模块
+# ——————————————————————————————
+membership(cluster) # 获取cluster的聚类内容，即modules
+t_modules <- sort(table(membership(cluster)),decr=T)
+t_modules_10 <- t_modules[1:10]
+t_modules_10_rank <- t_modules_10
+names(t_modules_10_rank) <- as.factor(1:10)
+print(t_modules_10)
+print(t_modules_10_rank)
+
+# 获取Top模块对应node的ID名称
+# ——————————————————————————————
+t_modules_points <- membership(cluster)[membership(cluster) %in% names(t_modules_10)]
+t_points <- NULL
+for(i in t_modules_points){
+  tx <- which(names(t_modules_10)==i)
+  t_points <- c(t_points, tx)
+}
+names(t_points) <- names(t_modules_points)
+point_modules_df <- data.frame(t_points)
+point_modules_df$ID <- rownames(point_modules_df)
+print(point_modules_df)
+
+# 基于select_keyword1在各个模块中的数量，决定是可视化那些模块
+# ——————————————————————————————
+select_keyword1 <- Top_ARG_S
+select_keyword1 <- ARG_ppm_source_ab_S$ID
+t_modules_sel <- table(factor(membership(cluster)[select_keyword1],levels=names(t_modules))) 
+t_modules_sel_10 <- t_modules_sel[names(t_modules_10)]
+# smcs10_plot <- t_modules_sel_10
+# names(smcs10_plot) <- as.factor(1:10)
+print(t_modules_sel_10)
+
+
+# 基于select_keyword2确定模块中包含了那些点的范围
+select_keyword2 <- ARG_ppm_source_ab_S$ID
+numbers <- c("2","1","3","5","6","8","4","9")
+t_mods_list_sel <- list()
+for (i in numbers){
+# for (i in names(t_modules_sel_10)){
+  # 筛选在modules的物种
+  point1 <- names(membership(cluster)[membership(cluster)==i])
+  # 筛选符合特定条件的的物种
+  point2 <- point1[point1 %in% select_keyword2]
+  # 构建mods_list
+  t_mods_list_sel[[i]] <- as.numeric(V(net)[point2])
+}
+
+t_mods_list_sel
+
+
+# 可视化设置，注意！tits_nodesizes一定要as.numeric
+# ——————————————————————————————
+
+
+
+V(net)$size <- 1
+
+V(net)$frame.color <- NA
+
+V(net)$color <- V(net)$name
+V(net)$color[V(net)$color %in% ARG_ppm_source_ab_S$ID] <- "ARG host"
+V(net)$color[!V(net)$color %in% "ARG host"] <- "others"
+V(net)$color[V(net)$color == "ARG host" ]    <- "#FF6347"
+V(net)$color[V(net)$color == "others" ]    <- "#005755"
+
+V(net)$size <- V(net)$name
+V(net)$size[V(net)$size %in% Top_ARG_S] <- 10
+V(net)$size[!V(net)$size %in% 10] <-3 
+
+
+tits_nodesizes <- as.numeric(V(net)$size);unique(tits_nodesizes)
+if (interactive()) coords_t_its <- layout_(net,with_fr(niter=9999, grid="nogrid"))
+t_cols <- c("antiquewhite","antiquewhite3","gray50","#7FFFD4","#87CEFA","#D8BFD8","#FFF0F5")
+t_cols2 <- c("#FF6347","#005755")
+
+set.seed(333)
+if (interactive()) {
+  plot(net,
+       vertex.label=NA, 
+       layout=coords_t_its,
+       vertex.size=tits_nodesizes,
+       mark.groups=t_mods_list_sel,
+       mark.border=t_cols,
+       mark.col=adjustcolor(t_cols, alpha.f = .5))
+  legend("right",legend=c("Module 3","Module 4", "Module 1","Module 5","Module 8"),col=t_cols,
+         bty="n",fill=t_cols,border=t_cols)
+  legend("left",legend=c("Up","Down"),col=t_cols2,
+         bty="n",fill=t_cols2,border=t_cols2)
+}
+
+
+```
+## meta网络
+```{r legacy_meta_network, eval=FALSE, purl=FALSE}
+
+# 寻找高丰度的Genus携带物种
+Top_ARG_S <- Top_taxa(ARG_ppm_source_ab_S_rh,n = 100,inputformat = 2,outformat = 1)$ID
+# network_analysis
+# ——————————————————————————————
+net_Bac_S_re_rh <- network_analysis_compat(input = Bac_S_re_rh,inputtype = 2,n = 100,threshold = 0.95,display = T,method = "spearman")
+
+# 构建网络：获取接临矩阵|统计量|顶点|igraph
+# ——————————————————————————————
+adjacency<-as.data.frame(net_Bac_S_re_rh[2])
+network_stat<-as.data.frame(net_Bac_S_re_rh[1])
+node<- data.frame(node = union(adjacency$source,adjacency$target));rownames(node) <- node$node
+net <- igraph::simplify(igraph::graph_from_data_frame(adjacency, directed = FALSE), remove.multiple = TRUE, remove.loops = TRUE)
+# net <- graph_from_data_frame(adjacency,direct=F,vertices = node )
+# plot(net,vertex.label=NA)
+
+# ——————————————————————————————
+# 构建模块：使用cluster_fast_greedy/fastgreedy.community算法
+cluster <- cluster_fast_greedy(net)
+# cluster <- fastgreedy.community(igraph1)
+cluster_id <- membership(cluster) 
+
+# 获取模块的统计值，并查看前10个模块
+# ——————————————————————————————
+membership(cluster) # 获取cluster的聚类内容，即modules
+t_modules <- sort(table(membership(cluster)),decr=T)
+t_modules_10 <- t_modules[1:10]
+t_modules_10_rank <- t_modules_10
+names(t_modules_10_rank) <- as.factor(1:10)
+print(t_modules_10)
+print(t_modules_10_rank)
+
+# 获取Top模块对应node的ID名称
+# ——————————————————————————————
+t_modules_points <- membership(cluster)[membership(cluster) %in% names(t_modules_10)]
+t_points <- NULL
+for(i in t_modules_points){
+  tx <- which(names(t_modules_10)==i)
+  t_points <- c(t_points, tx)
+}
+names(t_points) <- names(t_modules_points)
+point_modules_df <- data.frame(t_points)
+point_modules_df$ID <- rownames(point_modules_df)
+print(point_modules_df)
+
+# 基于select_keyword1在各个模块中的数量，决定是可视化那些模块
+# ——————————————————————————————
+select_keyword1 <- Top_ARG_S
+select_keyword1 <- ARG_ppm_source_ab_S$ID
+t_modules_sel <- table(factor(membership(cluster)[select_keyword1],levels=names(t_modules))) 
+t_modules_sel_10 <- t_modules_sel[names(t_modules_10)]
+# smcs10_plot <- t_modules_sel_10
+# names(smcs10_plot) <- as.factor(1:10)
+print(t_modules_sel_10)
+
+
+# 基于select_keyword2确定模块中包含了那些点的范围
+select_keyword2 <- ARG_ppm_source_ab_S$ID
+numbers <- c("2","3","1","16","8","6","4")
+t_mods_list_sel <- list()
+for (i in numbers){
+# for (i in names(t_modules_sel_10)){
+  # 筛选在modules的物种
+  point1 <- names(membership(cluster)[membership(cluster)==i])
+  # 筛选符合特定条件的的物种
+  point2 <- point1[point1 %in% select_keyword2]
+  # 构建mods_list
+  t_mods_list_sel[[i]] <- as.numeric(V(net)[point2])
+}
+
+t_mods_list_sel
+
+
+# 可视化设置，注意！tits_nodesizes一定要as.numeric
+# ——————————————————————————————
+
+
+
+V(net)$size <- 1
+
+V(net)$frame.color <- NA
+
+V(net)$color <- V(net)$name
+V(net)$color[V(net)$color %in% ARG_ppm_source_ab_S$ID] <- "ARG host"
+V(net)$color[!V(net)$color %in% "ARG host"] <- "others"
+V(net)$color[V(net)$color == "ARG host" ]    <- "#FF6347"
+V(net)$color[V(net)$color == "others" ]    <- "#005755"
+
+V(net)$size <- V(net)$name
+V(net)$size[V(net)$size %in% Top_ARG_S] <- 10
+V(net)$size[!V(net)$size %in% 10] <-3 
+
+
+tits_nodesizes <- as.numeric(V(net)$size);unique(tits_nodesizes)
+if (interactive()) coords_t_its <- layout_(net,with_fr(niter=9999, grid="nogrid"))
+t_cols <- c("antiquewhite","antiquewhite3","gray50","#7FFFD4","#87CEFA","#D8BFD8","#FFF0F5")
+t_cols2 <- c("#FF6347","#005755")
+
+set.seed(333)
+if (interactive()) {
+  plot(net,
+       vertex.label=NA, 
+       layout=coords_t_its,
+       vertex.size=tits_nodesizes,
+       mark.groups=t_mods_list_sel,
+       mark.border=t_cols,
+       mark.col=adjustcolor(t_cols, alpha.f = .5))
+  legend("right",legend=c("Module 3","Module 4", "Module 1","Module 5","Module 8"),col=t_cols,
+         bty="n",fill=t_cols,border=t_cols)
+  legend("left",legend=c("Up","Down"),col=t_cols2,
+         bty="n",fill=t_cols2,border=t_cols2)
+}
+
+
+
+temp <- colSums(ARG_ppm_type_ab[,-1]) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(temp)[2] <- "abundance"
+Group_type_sum <- left_join(Group,temp,by = "ID")
+Group_type_sum$State=factor(Group_type_sum$State,levels =c("None","Healthy","Diseased"))
+
+
+attach(point_modules_df)
+attach(ARG_ppm_source_ab_S_rh)
+modules_ARG <- left_join(point_modules_df,ARG_ppm_source_ab_S_rh) %>% na.omit() %>% .[,-2]
+modules_ARG2 <- aggregate(modules_ARG[,-1], by=list(modules_ARG[,1]),FUN = sum) %>% rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T)
+colnames(modules_ARG2)[1] <- "ID"
+colnames(modules_ARG2) <- c("ID",paste0("ARG_",colnames(modules_ARG2)[-1]))
+final <- left_join(Group_rh,modules_ARG2)
+final_melt <- melt(final, measure.vars = grep("^ARG_", names(final), value = TRUE))
+final_melt$State <- factor(final_melt$State,levels = c("Healthy","Diseased"))
+
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+modules_ARG_plot <- ggplot(data = final_melt,aes(x= State,y = value,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~variable,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("ARG ppm abundance")
+modules_ARG_plot
+
+point_modules_df2 <- point_modules_df[which(point_modules_df$t_points %in% modules_ARG$t_points),]
+modules_Bac <- left_join(point_modules_df2,Bac_S_re) %>% na.omit() %>% .[,-2]
+modules_Bac2 <- aggregate(modules_Bac[,-1], by=list(modules_Bac[,1]),FUN = sum) %>% rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T)
+colnames(modules_Bac2) <- c("ID",paste0("Bac_",colnames(modules_Bac2)[-1]))
+final <- left_join(Group_rh,modules_Bac2)
+final_melt <- melt(final, measure.vars = grep("^Bac_", names(final), value = TRUE))
+final_melt$State <- factor(final_melt$State,levels = c("Healthy","Diseased"))
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+modules_Bac_plot <- ggplot(data = final_melt,aes(x= State,y = value,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~variable,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("relative abundance")
+modules_Bac_plot
+
+
+final <- left_join(Group_rh,modules_Bac2) %>% left_join(.,modules_ARG2) %>% left_join(.,Group_type_sum)
+final_melt <- melt(final, measure.vars = grep("^(Bac_|ARG_)", names(final), value = TRUE))
+Bac_ARG_cor <- ggplot(final_melt,aes(x = final_melt$value,y = abundance))+
+  geom_point(aes(color=State))+
+  facet_wrap(~variable,scales = "free_x",nrow = 1)+
+  geom_smooth(method = 'lm',size=1)+
+  stat_cor(show.legend = F,digits = .1)+
+  theme_jgf()+
+  xlab("Bacteria relative abundance")+ylab("ARG ppm abundance")
+Bac_ARG_cor
+library(cowplot)
+P <- Bac_ARG_cor/modules_Bac_plot/modules_ARG_plot
+P
+
+
+attach(final)
+# 筛选关键词构建网络！
+ggplot(final,aes(x = final$Bac_1,y = final$ARG_1))+
+  geom_point()+
+  # facet_wrap(~variable,scales = "free")+
+  geom_smooth(method = 'lm',size=1)+
+  stat_cor(show.legend = F,digits = .1)+
+  theme_jgf()
+
+
+
+```
+
+
+# 微生物互作网络rh 物种水平
+```{r legacy_stem_species_network, eval=FALSE, purl=FALSE}
+
+# 寻找高丰度的Genus携带物种
+Top_ARG_S <- Top_taxa(ARG_ppm_source_ab_S_st,n = 100,inputformat = 2,outformat = 1)$ID
+
+# network_analysis
+# ——————————————————————————————
+net_Bac_S_re_st <- network_analysis_compat(input = Bac_S_re_st,inputtype = 2,n = 20,threshold = 0.9,display = T,method = "spearman")
+
+# 构建网络：获取接临矩阵|统计量|顶点|igraph
+# ——————————————————————————————
+adjacency<-as.data.frame(net_Bac_S_re_st[2])
+network_stat<-as.data.frame(net_Bac_S_re_st[1])
+node<- data.frame(node = union(adjacency$source,adjacency$target));rownames(node) <- node$node
+net <- igraph::simplify(igraph::graph_from_data_frame(adjacency, directed = FALSE), remove.multiple = TRUE, remove.loops = TRUE)
+# net <- graph_from_data_frame(adjacency,direct=F,vertices = node )
+# plot(net,vertex.label=NA)
+
+# ——————————————————————————————
+# 构建模块：使用cluster_fast_greedy/fastgreedy.community算法
+cluster <- cluster_fast_greedy(net)
+# cluster <- fastgreedy.community(igraph1)
+cluster_id <- membership(cluster) 
+
+# 获取模块的统计值，并查看前10个模块
+# ——————————————————————————————
+membership(cluster) # 获取cluster的聚类内容，即modules
+t_modules <- sort(table(membership(cluster)),decr=T)
+t_modules_10 <- t_modules[1:10]
+t_modules_10_rank <- t_modules_10
+names(t_modules_10_rank) <- as.factor(1:10)
+print(t_modules_10)
+print(t_modules_10_rank)
+
+# 获取Top模块对应node的ID名称
+# ——————————————————————————————
+t_modules_points <- membership(cluster)[membership(cluster) %in% names(t_modules_10)]
+t_points <- NULL
+for(i in t_modules_points){
+  tx <- which(names(t_modules_10)==i)
+  t_points <- c(t_points, tx)
+}
+names(t_points) <- names(t_modules_points)
+point_modules_df <- data.frame(t_points)
+point_modules_df$ID <- rownames(point_modules_df)
+print(point_modules_df)
+
+# 基于select_keyword1在各个模块中的数量，决定是可视化那些模块
+# ——————————————————————————————
+select_keyword1 <- Top_ARG_S
+select_keyword1 <- ARG_ppm_source_ab_S$ID
+t_modules_sel <- table(factor(membership(cluster)[select_keyword1],levels=names(t_modules))) 
+t_modules_sel_10 <- t_modules_sel[names(t_modules_10)]
+# smcs10_plot <- t_modules_sel_10
+# names(smcs10_plot) <- as.factor(1:10)
+print(t_modules_sel_10)
+
+
+# 基于select_keyword2确定模块中包含了那些点的范围
+select_keyword2 <- ARG_ppm_source_ab_S$ID
+numbers <- c("2","3","1","5","8","9")
+t_mods_list_sel <- list()
+for (i in numbers){
+# for (i in names(t_modules_sel_10)){
+  # 筛选在modules的物种
+  point1 <- names(membership(cluster)[membership(cluster)==i])
+  # 筛选符合特定条件的的物种
+  point2 <- point1[point1 %in% select_keyword2]
+  # 构建mods_list
+  t_mods_list_sel[[i]] <- as.numeric(V(net)[point2])
+}
+
+t_mods_list_sel
+
+
+# 可视化设置，注意！tits_nodesizes一定要as.numeric
+# ——————————————————————————————
+
+
+
+V(net)$size <- 1
+
+V(net)$frame.color <- NA
+
+V(net)$color <- V(net)$name
+V(net)$color[V(net)$color %in% ARG_ppm_source_ab_S$ID] <- "ARG host"
+V(net)$color[!V(net)$color %in% "ARG host"] <- "others"
+V(net)$color[V(net)$color == "ARG host" ]    <- "#FF6347"
+V(net)$color[V(net)$color == "others" ]    <- "#005755"
+
+V(net)$size <- V(net)$name
+V(net)$size[V(net)$size %in% Top_ARG_S] <- 10
+V(net)$size[!V(net)$size %in% 10] <-3 
+
+
+tits_nodesizes <- as.numeric(V(net)$size);unique(tits_nodesizes)
+if (interactive()) coords_t_its <- layout_(net,with_fr(niter=9999, grid="nogrid"))
+t_cols <- c("antiquewhite","antiquewhite3","gray50","#7FFFD4","#87CEFA","#D8BFD8","#FFF0F5")
+t_cols2 <- c("#FF6347","#005755")
+
+set.seed(333)
+if (interactive()) {
+  plot(net,
+       vertex.label=NA, 
+       layout=coords_t_its,
+       vertex.size=tits_nodesizes,
+       mark.groups=t_mods_list_sel,
+       mark.border=t_cols,
+       mark.col=adjustcolor(t_cols, alpha.f = .5))
+  legend("right",legend=c("Module 3","Module 4", "Module 1","Module 5","Module 8"),col=t_cols,
+         bty="n",fill=t_cols,border=t_cols)
+  legend("left",legend=c("Up","Down"),col=t_cols2,
+         bty="n",fill=t_cols2,border=t_cols2)
+}
+
+
+
+temp <- colSums(ARG_ppm_type_ab[,-1]) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(temp)[2] <- "abundance"
+Group_type_sum <- left_join(Group,temp,by = "ID")
+Group_type_sum$State=factor(Group_type_sum$State,levels =c("None","Healthy","Diseased"))
+
+
+attach(point_modules_df)
+attach(ARG_ppm_source_ab_S_st)
+modules_ARG <- left_join(point_modules_df,ARG_ppm_source_ab_S_st) %>% na.omit() %>% .[,-2]
+modules_ARG2 <- aggregate(modules_ARG[,-1], by=list(modules_ARG[,1]),FUN = sum) %>% rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T)
+colnames(modules_ARG2)[1] <- "ID"
+colnames(modules_ARG2) <- c("ID",paste0("ARG_",colnames(modules_ARG2)[-1]))
+final <- left_join(Group_st,modules_ARG2)
+final_melt <- melt(final, measure.vars = grep("^ARG_", names(final), value = TRUE))
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+modules_ARG_plot <- ggplot(data = final_melt,aes(x= State,y = value,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~variable,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("ARG ppm abundance")
+modules_ARG_plot
+
+
+
+
+modules_Bac <- left_join(point_modules_df,Bac_S_re) %>% na.omit() %>% .[,-2]
+modules_Bac2 <- aggregate(modules_Bac[,-1], by=list(modules_Bac[,1]),FUN = sum) %>% rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T)
+colnames(modules_Bac2) <- c("ID",paste0("Bac_",colnames(modules_Bac2)[-1]))
+final <- left_join(Group_st,modules_Bac2)
+final_melt <- melt(final, measure.vars = grep("^Bac_", names(final), value = TRUE))
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+modules_Bac_plot <- ggplot(data = final_melt,aes(x= State,y = value,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~variable,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("relative abundance")
+modules_Bac_plot
+
+
+final <- left_join(Group_st,modules_Bac2) %>% left_join(.,modules_ARG2) %>% left_join(.,Group_type_sum)
+final_melt <- melt(final, measure.vars = grep("^(Bac_|ARG_)", names(final), value = TRUE))
+ggplot(final_melt,aes(x = final_melt$value,y = abundance))+
+  geom_point()+
+  facet_wrap(~variable,scales = "free")+
+  geom_smooth(method = 'lm',size=1)+
+  stat_cor(show.legend = F,digits = .1)+
+  theme_jgf()
+
+attach(final)
+
+
+
+
+# 筛选关键词构建网络！
+ggplot(final,aes(x = final$Bac_1,y = final$ARG_1))+
+  geom_point()+
+  # facet_wrap(~variable,scales = "free")+
+  geom_smooth(method = 'lm',size=1)+
+  stat_cor(show.legend = F,digits = .1)+
+  theme_jgf()
+
+
+
+```

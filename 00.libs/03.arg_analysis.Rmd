@@ -1,0 +1,1408 @@
+---
+title: "RS_ARG"
+author: "yaozhong_zhang"
+date: "2023-02-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+path <- getwd()
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = path)
+knitr::opts_knit$set(root.dir = path)
+package <- c('readxl','magrittr','LorMe','randomForest',
+             'ggtree','reshape2','ggplot2','dplyr','tidyr',
+             'readr','purrr','tibble','stringr','forcats',
+             'ggplot2','ggsci','ggridges','RColorBrewer','pheatmap',
+             'patchwork','ggpubr','zyzPackage','cowplot','ggrepel','networkD3','vegan')
+
+lapply(package, function(x){library(x, character.only = T)}) 
+load("04.datasave/Rdata/Group_and_tax_V230225.Rdata")
+load(file = "04.datasave/Rdata/Group_and_tax_filter_V230810.Rdata")
+source("00.libs/functions/legacy_helpers.R")
+source("00.libs/functions/project_paths.R")
+```
+
+# ARG数据导入
+```{r}
+# ARG Type和subtype数据
+# ARG数据
+ARG_ppm_type_ab <- read.table("01.rawdata/TAVMM/ARG-OUT.ppm.type.txt",header = T,fill = T,check.names = F,sep = "\t") 
+ARG_ppm_subtype_ab <- read.delim("01.rawdata/TAVMM/ARG-OUT.ppm.subtype.txt",header = T,fill = T,check.names = F,sep = "\t") 
+colnames(ARG_ppm_type_ab)[1] <- "ID"
+colnames(ARG_ppm_subtype_ab)[1] <- "ID"
+ARG_ppm_type_ab$ID[which(ARG_ppm_type_ab$ID=="macrolide-lincosamide-streptogramin" )] <- "MLS"
+ARG_ppm_type_ab <- ARG_ppm_type_ab  %>% dplyr::select(ID,all_of(Group$ID))
+ARG_ppm_subtype_ab <- ARG_ppm_subtype_ab  %>% dplyr::select(ID,all_of(Group$ID))
+
+# ARG溯源数据
+order <- Group$ID
+attach(Pangenome_tax)
+ARG_ppm_source_ab <- read.delim("01.rawdata/TAVMM/ARG-Tax.ppm.gene.txt",header = T,fill = T,check.names = F,sep = "\t")  %>% .[,-c(1:3)]
+colnames(ARG_ppm_source_ab)[1] <- "ID"
+ARG_ppm_source_ab <- aggregate(x = ARG_ppm_source_ab[,-1],by = list(ARG_ppm_source_ab$ID),FUN = sum)
+colnames(ARG_ppm_source_ab)[1] <- "ID"
+ARG_ppm_source_re <- ARG_ppm_source_ab %>% sweep_zyz(.,format=2)
+
+taxnonmy_pan(prefix = "ARG_ppm_source_ab",df = ARG_ppm_source_ab,order = order,levels = c("P","G","S"))
+taxnonmy_pan(prefix = "ARG_ppm_source_re",df = ARG_ppm_source_re,order = order,levels = c("P","G","S"))
+
+
+# 
+# Group_list <- list(
+#   Group_h = Group_h,
+#   Group_d = Group_d,
+#   Group_rh = Group_rh,
+#   Group_ck = Group_ck,
+#   Group_nck = Group_nck,
+#   Group_st = Group_st
+# )
+
+
+Group_list <- list(
+  Group_h = Group_h,
+  Group_d = Group_d,
+  Group_rh = Group_rh,
+  Group_ck = Group_ck,
+  Group_nck = Group_nck,
+  Group_st = Group_st,
+  Group_hrh = Group_hrh,
+  Group_hst = Group_hst,
+  Group_dst = Group_dst,
+  Group_drh = Group_drh
+)
+
+
+Group_selID(prefix = "ARG_ppm_type_ab",df = ARG_ppm_type_ab,Group_list = Group_list)
+Group_selID(prefix = "ARG_ppm_subtype_ab",df = ARG_ppm_subtype_ab,Group_list = Group_list)
+
+Group_selID(prefix = "ARG_ppm_source_ab_S",df = ARG_ppm_source_ab_S,Group_list = Group_list)
+Group_selID(prefix = "ARG_ppm_source_ab_G",df = ARG_ppm_source_ab_G,Group_list = Group_list)
+Group_selID(prefix = "ARG_ppm_source_ab_P",df = ARG_ppm_source_ab_P,Group_list = Group_list)
+
+Group_selID(prefix = "ARG_ppm_source_re_S",df = ARG_ppm_source_re_S,Group_list = Group_list)
+Group_selID(prefix = "ARG_ppm_source_re_G",df = ARG_ppm_source_re_G,Group_list = Group_list)
+Group_selID(prefix = "ARG_ppm_source_re_P",df = ARG_ppm_source_re_P,Group_list = Group_list)
+
+# These species-level ARG-host profiles are consumed by the later integrated
+# host–microbiome section in 02.microbiome_analysis.Rmd.
+save_rdata(
+  ARG_ppm_type_ab,
+  ARG_ppm_source_ab_S,
+  ARG_ppm_source_ab_S_rh,
+  ARG_ppm_source_ab_S_st,
+  ARG_ppm_source_ab_G,
+  ARG_ppm_source_ab_G_rh,
+  ARG_ppm_source_ab_G_st,
+  file = "04.datasave/Rdata/ARG_host_species_profiles.RData"
+)
+
+# 计算病原菌的丰度|二选一！
+{
+  # Apply the same Ralstonia exclusion used by the microbiome workflow.  This
+  # keeps the ARG script self-contained instead of relying on an object left
+  # in an interactive session by another script.
+  rs_species <- c(
+    "Ralstonia pseudosolanacearum",
+    "Ralstonia solanacearum",
+    "blood disease bacterium A2-HR MARDI"
+  )
+  pathogen <- pathogen_list[!pathogen_list$Species %in% rs_species, ]
+  # 来自病原菌的ARG的ppm丰度
+  temp1 <- left_join(ARG_ppm_source_ab_S,pathogen,by=c("ID"="Species")) %>% dplyr::select(Host,all_of(Group$ID))
+  temp1[is.na(temp1)] <- "None pathogen"
+  temp2 <- aggregate(temp1[,-1],by=list(temp1[,1]),FUN = sum)
+  colnames(temp2)[1] <- "ID"
+  ARG_ppm_source_ab_pa <- temp2
+}
+Group_selID(prefix = "ARG_ppm_source_ab_pa",df = ARG_ppm_source_ab_pa,Group_list = Group_list)
+
+
+```
+
+
+# ARG的Type组成及动态变化
+```{r}
+
+# LorMe04::community_plot(plotprefix ="ARG_ppm_type_ab" ,inputframe = ARG_ppm_type_ab,n = 9,inputformat = 2,groupframe = Group,treatlocation =8,replocation = 1 ,treatorder = c("None","Healthy","Diseased"))
+# P1 <- ARG_ppm_type_ab_barplot+facet_wrap(Source~State,scales = "free_x",ncol = 1)+scale_x_discrete()+xlab("")+ylab("Relative abundance")+
+#   scale_fill_npg()+
+#   scale_y_continuous(expand = c(0,0)) +
+#   theme_jgfbw()+
+#   theme(legend.position = "bottom")+
+#   theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.2, "lines"))+ guides(fill=guide_legend(nrow =2))+
+#   theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+#   theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+# P1
+
+
+LorMe04::community_plot(plotprefix ="ARG_ppm_type_ab_nck" ,inputframe = ARG_ppm_type_ab_nck,n = 9,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+P2 <- ARG_ppm_type_ab_nck_barplot+facet_grid(State~Source,scales = "free_x")+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2
+save_pdf( "03.figure/03.arg_analysis/ARG_type_ppm.pdf",height = 5,width = 5)
+
+
+ARG_ppm_subtype_ab_nck$ID %>% head()
+ARG_ppm_subtype_ab_nck2 <- ARG_ppm_subtype_ab_nck
+ARG_ppm_subtype_ab_nck2$ID <- sub(".*__", "", ARG_ppm_subtype_ab_nck2$ID)
+
+
+LorMe04::community_plot(plotprefix ="ARG_ppm_subtype_ab_nck" ,inputframe = ARG_ppm_subtype_ab_nck2,n = 9,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+P2_1 <- ARG_ppm_subtype_ab_nck_barplot+facet_grid(State~Source,scales = "free_x")+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2_1
+save_pdf( "03.figure/03.arg_analysis/ARG_subtype_ppm.pdf",height = 5,width = 5)
+
+P2+P2_1
+
+LorMe04::community_plot(plotprefix ="ARG_ppm_type_ab_h" ,inputframe = ARG_ppm_type_ab_h,n = 9,inputformat = 2,groupframe = Group_d,treatlocation =9,replocation = 1 )
+P1 <- ARG_ppm_type_ab_h_alluvialplot+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0))
+P1
+
+
+LorMe04::community_plot(plotprefix ="ARG_ppm_type_ab_d" ,inputframe = ARG_ppm_type_ab_d,n = 9,inputformat = 2,groupframe = Group_d,treatlocation =9,replocation = 1 )
+P1 <- ARG_ppm_type_ab_d_alluvialplot+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0))
+P1
+
+
+
+```
+
+# 统计-phDARGs类型和亚类
+```{r}
+cat("健康根际样品ARG Type水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_type_ab_hrh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+
+cat("发病根际样品ARG Type水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_type_ab_drh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("健康茎部样品ARG Type水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_type_ab_hst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("发病茎部样品ARG Type属水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_type_ab_dst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("健康根际样品ARG subtype水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_subtype_ab_hrh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("发病根际样品ARG subtype水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_subtype_ab_drh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("健康茎部样品ARG subtype水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_subtype_ab_hst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("发病茎部样品ARG subtype属水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_subtype_ab_dst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+
+
+
+
+```
+
+# 主图-ARG的Type丰度T检验
+
+```{r}
+
+temp <- colSums(ARG_ppm_type_ab[,-1]) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(temp)[2] <- "abundance"
+Group_type_sum <- left_join(Group,temp,by = "ID")
+Group_type_sum$State=factor(Group_type_sum$State,levels =c("None","Healthy","Diseased"))
+
+
+library(ggpubr)
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+symnum.args <- list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns"))
+P2 <- ggplot(data = Group_type_sum[which(Group_type_sum$State!="None"),],aes(x= State,y = abundance,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=.6,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6,size = .8)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=1) +
+  facet_wrap(~Source,scales = "free_x")+
+  theme(legend.position = "none")+
+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("ARG abundance (ppm)")
+  # scale_y_continuous(labels = scales::percent,trans = "sqrt")
+# save_pdf("01.output/fig1/T-pair_ARGMGEboxplot.pdf",height = 4,width = 8)
+P2
+
+save_pdf("03.figure/03.arg_analysis/ARG_type_ppm_Ttest.pdf",height = 3,width = 3)
+save_rdata(Group_type_sum,file = "04.datasave/Rdata/V1_JFGNatureARGsAll_231216.Rdata")
+
+```
+
+
+
+# 主图-ARG的Type多样性
+```{r}
+
+# 可以用_nck删除掉，保留ck
+alpha_ARG_nck <- LorMe04::Alpha_diversity_calculator(input = ARG_ppm_subtype_ab_nck,prefix = "",inputformat = 2,reads = F)
+Group_alpha_nck <- cbind(Group_nck,alpha_ARG_nck)
+Group_alpha_nck$State=factor(Group_alpha_nck$State,levels =c("Healthy","Diseased"))
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+Shannon_ARG_nck <- ggplot(data = Group_alpha_nck,aes(x= State,y = Shannon,color=State))+
+  theme_jgfbw()+
+  # scale_color_manual(values = color_zyz1)+
+  # scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~City,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Bacteria Shannon")
+Shannon_ARG_nck
+
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+Shannon_ARG_all <- ggplot(data = Group_alpha_nck,aes(x= State,y = Group_alpha_nck$`Species number`,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=.6,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6,size = .8)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~Source,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  # scale_y_continuous(labels = scales::percent) +
+  # stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+
+  xlab("")+ylab("Shannon index of ARG type")
+Shannon_ARG_all
+
+save_pdf("03.figure/03.arg_analysis/ARG_type_alpha_Ttest.pdf",height = 3,width = 3)
+
+temp <- LorMe::auto_signif_test(data = Group_alpha_nck[which(Group_alpha_nck$Source=="Rhizosphere"),],treatment_col = 8 ,value_col = 14)
+temp <- LorMe::auto_signif_test(data = Group_alpha_nck[which(Group_alpha_nck$Source=="Stem"),],treatment_col = 8 ,value_col = 14 )
+
+```
+
+# 主图-合并主图
+```{r}
+
+P2+Shannon_ARG_all
+save_pdf("03.figure/03.arg_analysis/M_ARGs_1.pdf",height = 3.5,width = 6.5)
+
+
+
+```
+
+
+# ARG的beta多样性
+```{r}
+
+Group_rh$State=factor(Group_rh$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+attach(ARG_ppm_type_ab_rh)
+#计算hellinger标准化的数据
+ARG_ppm_type_ab_rh_hellinger = decostand(rownames_zyz(ARG_ppm_type_ab_rh,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "ARG_ppm_type_ab_rh",inputframe = ARG_ppm_type_ab_rh,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+LorMe04::structure_plot(plotprefix = "ARG_ppm_type_ab_rh",inputframe = ARG_ppm_type_ab_rh_hellinger,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+ARG_ppm_type_ab_rh_PCA
+ARG_ppm_type_ab_rh_PCOA
+adonis = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+# 需要data.pca，计算坐标轴的解释度
+# 需要PCAframe，计算点的位置
+# 需要Group，用于分面的计算
+attach(data.pca)
+attach(ARG_ppm_type_ab_rh_PCAframe)
+attach(Group_rh)
+
+# spider_PCA <- function(data.pac,PCAframe,Group,Treatment){
+#   pca1 <- paste0("PC1:",round(summary(data.pca)$importance[2,1],4)*100,"%")
+#   pca2 <- paste0("PC2:",round(summary(data.pca)$importance[2,2],4)*100,"%")
+#   #get the first 4 axis for PCA,用于二维，三维图片绘制
+#   scrs = as.data.frame(PCAframe)[1:4] #get the first 4 axis for PCoA
+#   names(scrs) = c('PCA1', 'PCA2','PCA3','PCA4')# 可作物2d,3d，依次为xyz轴
+#   # 组合排序坐标和分组信息 
+#   colnumber <- which(colnames(Group)==Treatment)
+#   scrs <- cbind(as.data.frame(scrs), Group=Group[,colnumber] )
+#   # 求均值作为点的中心
+#   cent <- aggregate(cbind(PCA1, PCA2) ~ Group, data = scrs, FUN = mean)
+#   # 合并到样本坐标数据中
+#   segs <- merge(scrs, setNames(cent, c('Group','oPCA1','oPCA2')),by = 'Group', sort = FALSE)
+#   # lable标签
+#   adonis = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group$State ,permutations = 999, distance = 'bray')
+#   print(adonis)
+#   adonis_R2 <-adonis$aov.tab$R2[1] %>% round(.,2)
+#   adonis_P <- adonis$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+#   R2 <- paste0("adonis R^2=",adonis_R2)
+#   P <- paste0("adonis P=",adonis_P)
+#   R2P <- paste0(R2,"\n",P)
+#   assign("pca1",pca1,envir=.GlobalEnv)
+#   assign("pca2",pca2,envir=.GlobalEnv)
+#   assign("scrs",scrs,envir=.GlobalEnv)
+#   assign("segs",segs,envir=.GlobalEnv)
+#   assign("cent",cent,envir=.GlobalEnv)
+#   assign("adonis_R2",adonis_R2,envir=.GlobalEnv)
+#   assign("adonis_P",adonis_P,envir=.GlobalEnv)
+#   assign("R2",R2,envir=.GlobalEnv)
+#   assign("P",P,envir=.GlobalEnv)
+#   assign("R2P",R2P,envir=.GlobalEnv)
+# }
+
+spider_PCA <- function(data.pac,PCAframe,Group,Treatment,abundance){
+  pca1 <- paste0("PC1:",round(summary(data.pca)$importance[2,1],4)*100,"%")
+  pca2 <- paste0("PC2:",round(summary(data.pca)$importance[2,2],4)*100,"%")
+  #get the first 4 axis for PCA,用于二维，三维图片绘制
+  scrs = as.data.frame(PCAframe)[1:4] #get the first 4 axis for PCoA
+  names(scrs) = c('PCA1', 'PCA2','PCA3','PCA4')# 可作物2d,3d，依次为xyz轴
+  # 组合排序坐标和分组信息 
+  colnumber <- which(colnames(Group)==Treatment)
+  scrs <- cbind(as.data.frame(scrs), Group=Group[,colnumber] )
+  # 求均值作为点的中心
+  cent <- aggregate(cbind(PCA1, PCA2) ~ Group, data = scrs, FUN = mean)
+  # 合并到样本坐标数据中
+  segs <- merge(scrs, setNames(cent, c('Group','oPCA1','oPCA2')),by = 'Group', sort = FALSE)
+  # lable标签
+  adonis = adonis(rownames_zyz(abundance,transform = T)~Group[,colnumber] ,permutations = 999, distance = 'bray')
+  print(adonis)
+  adonis_R2 <-adonis$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  R2 <- paste0("adonis R^2=",adonis_R2)
+  P <- paste0("adonis P=",adonis_P)
+  R2P <- paste0(R2,"\n",P)
+  assign("pca1",pca1,envir=.GlobalEnv)
+  assign("pca2",pca2,envir=.GlobalEnv)
+  assign("scrs",scrs,envir=.GlobalEnv)
+  assign("segs",segs,envir=.GlobalEnv)
+  assign("cent",cent,envir=.GlobalEnv)
+  assign("adonis_R2",adonis_R2,envir=.GlobalEnv)
+  assign("adonis_P",adonis_P,envir=.GlobalEnv)
+  assign("R2",R2,envir=.GlobalEnv)
+  assign("P",P,envir=.GlobalEnv)
+  assign("R2P",R2P,envir=.GlobalEnv)
+}
+spider_PCOA <- function(data.pcoa,PCOAframe,Group,Treatment,abundance){
+  pcoa1 <- paste0("PCOA1:",round(100 * data.pcoa$values[1,2],2),"%")#两位小数；第一轴解释量
+  pcoa2 <- paste0("PCOA2:",round(100 * data.pcoa$values[2,2],2),"%")#两位小数；第二轴解释量
+  #get the first 4 axis for PCA,用于二维，三维图片绘制
+  scrs = as.data.frame(PCOAframe)[1:2] #get the first 4 axis for PCoA
+  names(scrs) = c('PCOA1', 'PCOA2')# 可作物2d,3d，依次为xyz轴
+  # 组合排序坐标和分组信息 
+  colnumber <- which(colnames(Group)==Treatment)
+  scrs <- cbind(as.data.frame(scrs), Group=Group[,colnumber] )
+  # colnames(scrs)[3] <- "Group"
+  # 求均值作为点的中心
+  cent <- aggregate(cbind(PCOA1, PCOA2) ~ Group, data = scrs, FUN = mean)
+  # 合并到样本坐标数据中
+  segs <- merge(scrs, setNames(cent, c('Group','oPCOA1','oPCOA2')),by = 'Group', sort = FALSE)
+  # lable标签
+  adonis = adonis(rownames_zyz(abundance,transform = T)~Group[,colnumber] ,permutations = 999, distance = 'bray')
+  print(adonis)
+  adonis_R2 <-adonis$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  R2 <- paste0("adonis R^2=",adonis_R2)
+  P <- paste0("adonis P=",adonis_P)
+  R2P <- paste0(R2,"\n",P)
+  assign("pcoa1",pcoa1,envir=.GlobalEnv)
+  assign("pcoa2",pcoa2,envir=.GlobalEnv)
+  assign("scrs",scrs,envir=.GlobalEnv)
+  assign("segs",segs,envir=.GlobalEnv)
+  assign("cent",cent,envir=.GlobalEnv)
+  assign("adonis_R2",adonis_R2,envir=.GlobalEnv)
+  assign("adonis_P",adonis_P,envir=.GlobalEnv)
+  assign("R2",R2,envir=.GlobalEnv)
+  assign("P",P,envir=.GlobalEnv)
+  assign("R2P",R2P,envir=.GlobalEnv)
+}
+
+spider_PCA(data.pac = data.pca,PCAframe = ARG_ppm_type_ab_rh_PCAframe,Group = Group_rh,Treatment = "State",abundance = ARG_ppm_type_ab_rh)
+
+# 可视化
+beta_ARG_rh <- ggplot(scrs, aes(PCA1, PCA2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCA1, yend = oPCA2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =max(scrs$PCA1)-10, y = max(scrs$PCA2)-1, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.1))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pca1, y = pca2)#,title="bray_curtis PCoA"
+beta_ARG_rh
+save_pdf("03.figure/03.arg_analysis/S_ARG_type_PCA_rh.pdf",height = 3,width = 3)
+
+
+# 绘制解释度图片
+attach(scrs)
+Group_pca <- left_join(Group,rownames_zyz(scrs,transform = F,cbindrowname = T)) %>% na.omit()
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+rh_pca1 <- ggplot(data = Group_pca,aes(x= State,y = PCA1,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjurh = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")+
+  coord_flip()
+rh_pca1
+
+rh_pca2 <- ggplot(data = Group_pca,aes(x= State,y = PCA2,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  # scale_y_continuous(labels = scales::percent) +
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjurh = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.title.y=element_blank(), axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")
+rh_pca2
+
+{
+  adonis_State = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group_rh$State ,permutations = 999, dirhance = 'bray')
+  adonis_City = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group_rh$City ,permutations = 999, dirhance = 'bray')
+  adonis_City_State = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group_rh$City+Group_rh$State ,permutations = 999, dirhance = 'bray')
+  
+  adonis_R2 <-adonis_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_2 <-adonis_City$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_2 <- adonis_City$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_3 <-adonis_City_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_3 <- adonis_City_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  
+  adonis_df1 <- data.frame(Treat="State",R2=adonis_R2,P=adonis_P)
+  adonis_df2 <- data.frame(Treat="City",R2=adonis_R2_2,P=adonis_P_2)
+  adonis_df3 <- data.frame(Treat="State:City",R2=adonis_R2_3,P=adonis_P_3)
+  adonis_df <- rbind(adonis_df1,adonis_df2,adonis_df3)
+  adonis_df$Treat2 <- paste0(adonis_df$Treat," (p=",adonis_df$P,")")
+}
+adonis_df
+adonis <- ggplot(data = adonis_df,aes(x = Treat2,y = R2))+
+  geom_col(fill=color_zyz3[1],width = .2)+
+  theme_jgf()+
+  # scale_y_continuous(labels = scales::percent) +
+  xlab("")+ylab("Interpretability")+
+  scale_x_discrete(guide = guide_axis(position = "right")) + 
+  scale_y_continuous(guide = guide_axis(position = "top"))+
+  coord_flip()
+adonis
+
+adonis <- ggplot(data = adonis_df, aes(x = Treat2, y = R2)) +
+  geom_col(fill = color_zyz3[1], width = .25) +
+  theme_jgf() +
+  xlab("") + ylab("Interpretability") +
+  scale_x_discrete(guide = guide_axis(position = "right")) +
+  scale_y_continuous(
+    breaks = c(0, 0.40),
+    labels = c("0", "0.4"),
+    expand = expansion(mult = c(0, 0.05)),
+    guide = guide_axis(position = "top")
+  ) +
+  coord_flip()
+adonis
+
+
+temp1 <- (rh_pca1|adonis)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+temp2 <- (beta_ARG_rh|rh_pca2)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+(temp1/temp2)+ plot_layout(heights = c(1,4))+theme(plot.margin=unit(rep(0,4),'lines'))
+
+save_pdf("03.figure/03.arg_analysis/PCOA_type_rh.pdf",width = 5.5,height = 4.5)
+
+
+
+
+#######___________________
+Group_st$State=factor(Group_st$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+attach(ARG_ppm_type_ab_st)
+#计算hellinger标准化的数据
+ARG_ppm_type_ab_st_hellinger = decostand(rownames_zyz(ARG_ppm_type_ab_st,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "ARG_ppm_type_ab_st",inputframe = ARG_ppm_type_ab_st,inputformat = 2,groupframe = Group_st,treatlocation = 8)
+LorMe04::structure_plot(plotprefix = "ARG_ppm_type_ab_st",inputframe = ARG_ppm_type_ab_st_hellinger,inputformat = 2,groupframe = Group_st,treatlocation = 8)
+ARG_ppm_type_ab_st_PCA
+ARG_ppm_type_ab_st_PCOA
+adonis = adonis(rownames_zyz(ARG_ppm_type_ab_st,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+# 需要data.pca，计算坐标轴的解释度
+# 需要PCAframe，计算点的位置
+# 需要Group，用于分面的计算
+attach(data.pca)
+attach(ARG_ppm_type_ab_st_PCAframe)
+attach(Group_st)
+
+spider_PCA(data.pac = data.pca,PCAframe = ARG_ppm_type_ab_st_PCAframe,Group = Group_st,Treatment = "State",abundance = ARG_ppm_type_ab_st)
+
+# 可视化
+beta_ARG_st <- ggplot(scrs, aes(PCA1, PCA2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCA1, yend = oPCA2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =max(scrs$PCA1)-8, y = max(scrs$PCA2)-5, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.1))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pca1, y = pca2)#,title="bray_curtis PCoA"
+beta_ARG_st
+save_pdf("03.figure/03.arg_analysis/S_ARG_type_PCA_st.pdf",height = 3,width = 3)
+
+
+
+# 绘制解释度图片
+attach(scrs)
+Group_pca <- left_join(Group,rownames_zyz(scrs,transform = F,cbindrowname = T)) %>% na.omit()
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+st_pca1 <- ggplot(data = Group_pca,aes(x= State,y = PCA1,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")+
+  coord_flip()
+st_pca1
+
+st_pca2 <- ggplot(data = Group_pca,aes(x= State,y = PCA2,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  # scale_y_continuous(labels = scales::percent) +
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",label = "p.format" ,bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.title.y=element_blank(), axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")
+st_pca2
+
+
+
+
+{
+  adonis_State = adonis(rownames_zyz(ARG_ppm_type_ab_st,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+  adonis_City = adonis(rownames_zyz(ARG_ppm_type_ab_st,transform = T)~Group_st$City ,permutations = 999, distance = 'bray')
+  adonis_City_State = adonis(rownames_zyz(ARG_ppm_type_ab_st,transform = T)~Group_st$City+Group_st$State ,permutations = 999, distance = 'bray')
+  
+  adonis_R2 <-adonis_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_2 <-adonis_City$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_2 <- adonis_City$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_3 <-adonis_City_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_3 <- adonis_City_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  
+  adonis_df1 <- data.frame(Treat="State",R2=adonis_R2,P=adonis_P)
+  adonis_df2 <- data.frame(Treat="City",R2=adonis_R2_2,P=adonis_P_2)
+  adonis_df3 <- data.frame(Treat="State:City",R2=adonis_R2_3,P=adonis_P_3)
+  adonis_df <- rbind(adonis_df1,adonis_df2,adonis_df3)
+  adonis_df$Treat2 <- paste0(adonis_df$Treat," (p=",adonis_df$P,")")
+}
+adonis_df
+adonis <- ggplot(data = adonis_df,aes(x = Treat2,y = R2))+
+  geom_col(fill=color_zyz3[1],width = .2)+
+  theme_jgf()+
+  # scale_y_continuous(labels = scales::percent) +
+  xlab("")+ylab("Interpretability")+
+  scale_x_discrete(guide = guide_axis(position = "right")) + 
+  scale_y_continuous(guide = guide_axis(position = "top"))+
+  coord_flip()
+adonis
+
+
+adonis <- ggplot(data = adonis_df, aes(x = Treat2, y = R2)) +
+  geom_col(fill = color_zyz3[1], width = .25) +
+  theme_jgf() +
+  xlab("") + ylab("Interpretability") +
+  scale_x_discrete(guide = guide_axis(position = "right")) +
+  scale_y_continuous(
+    breaks = c(0, 0.20),
+    labels = c("0", "0.2"),
+    expand = expansion(mult = c(0, 0.05)),
+    guide = guide_axis(position = "top")
+  ) +
+  coord_flip()
+adonis
+
+
+temp1 <- (st_pca1|adonis)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+temp2 <- (beta_ARG_st|st_pca2)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+(temp1/temp2)+ plot_layout(heights = c(1,4))+theme(plot.margin=unit(rep(0,4),'lines'))
+save_pdf("03.figure/03.arg_analysis/PCOA_type_st.pdf",width = 5.5,height = 4.5)
+
+
+
+
+
+```
+
+
+# ARG的溯源的组成
+选取Genus水平的可能会好一点
+```{r}
+# ppm丰度
+LorMe04::community_plot(plotprefix ="ARG_ppm_source_ab_S_nck" ,inputframe = ARG_ppm_source_ab_S_nck,n = 5,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+P2 <- ARG_ppm_source_ab_S_nck_barplot+facet_grid(State~Source,scales = "free")+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2
+
+# 相对丰度
+LorMe04::community_plot(plotprefix ="ARG_ppm_source_re_S_nck" ,inputframe = ARG_ppm_source_re_S_nck,n = 5,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+P2 <- ARG_ppm_source_re_S_nck_barplot+facet_grid(State~Source,scales = "free")+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0)) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2
+
+
+
+# Genus水平相对丰度
+LorMe04::community_plot(plotprefix ="ARG_ppm_source_re_G_nck" ,inputframe = ARG_ppm_source_re_G_nck,n = 6,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+
+# 适用npg_color去映射color
+Grouped_top6
+# Ralstonia$tax %>% unique()
+levels=c("Ralstonia","Pseudomonas","Acinetobacter","Enterobacter","Burkholderia","Citrobacter","Others")
+library(scales)
+show_col(pal_npg("nrc")(10))
+col <- (pal_npg("nrc")(7))
+
+npg_cols <- c("#E64B35FF", "#4DBBD5FF", "#00A087FF", "#3C5488FF", "#F39B7FFF", "#8491B4FF", "#91D1C2FF", "#DC0000FF", "#7E6148FF", "#B09C85FF")[1:7]
+names(npg_cols) <- c("Ralstonia","Pseudomonas","Acinetobacter","Enterobacter","Burkholderia","Citrobacter","Others") ##所有处理均以CS_col映射颜色##
+
+
+P2 <- ARG_ppm_source_re_G_nck_barplot+
+  facet_grid(State~Source,scales = "free")+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_manual(values = npg_cols)+
+  scale_y_continuous(expand = c(0,0),labels = scales::percent) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2
+save_pdf( "03.figure/03.arg_analysis/S_ARG_host_ppm.pdf",height = 5,width = 5)
+
+
+
+
+# Genus水平相对丰度
+LorMe04::community_plot(plotprefix ="ARG_ppm_source_re_P_nck" ,inputframe = ARG_ppm_source_re_P_nck,n = 6,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+
+P2 <- ARG_ppm_source_re_P_nck_barplot+
+  facet_grid(State~Source,scales = "free")+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_bmj()+
+  scale_y_continuous(expand = c(0,0),labels = scales::percent) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2
+save_pdf( "03.figure/03.arg_analysis/ARG_host_P_ppm.pdf",height = 5,width = 5)
+
+
+
+LorMe04::community_plot(plotprefix ="ARG_ppm_source_ab_G_d" ,inputframe = ARG_ppm_source_ab_G_d,n = 9,inputformat = 2,groupframe = Group_d,treatlocation =9,replocation = 1 )
+P1 <- ARG_ppm_source_ab_G_d_alluvialplot+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0))
+P1
+
+
+```
+
+# 统计-phD物种溯源差异
+```{r}
+
+
+cat("健康根际样品ARG溯源Genus水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_G_hrh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("发病根际样品ARG溯源Genus水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_G_drh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("健康茎部样品ARG溯源Genus水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_G_hst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("发病茎部样品ARG溯源Genus水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_G_dst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("健康根际样品ARG溯源Phylum水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_P_hrh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("发病根际样品ARG溯源Phylum水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_P_drh,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("健康茎部样品ARG溯源Phylum水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_P_hst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+cat("发病茎部样品ARG溯源Phylum水平丰度")
+df1 <- get_top_taxa(df = ARG_ppm_source_ab_P_dst,id_col = "ID",top_n = 10)
+df1$Top_Summary
+df1$Total_Abundance
+
+
+
+
+
+
+```
+
+
+# ARG溯源青枯菌的T-test
+```{r}
+
+rs = c('Ralstonia pseudosolanacearum',
+       'Ralstonia solanacearum',
+       'blood disease bacterium A2-HR MARDI')
+
+
+# 来自RS的ARG的ppm丰度
+ARG_ppm_source_ab_S_rs <- ARG_ppm_source_ab_S[which(ARG_ppm_source_ab_S$ID %in% rs ),]
+temp <- colSums(ARG_ppm_source_ab_S_rs[,-1]) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(temp)[2] <- "abundance"
+temp$ID <- rownames(temp)
+ARG_ppm_source_ab_S_rs <- left_join(Group,temp,by = "ID")
+ARG_ppm_source_ab_S_rs$Rep <-  paste(substr(ARG_ppm_source_ab_S_rs$GroupID,1,2),substr(ARG_ppm_source_ab_S_rs$GroupID,5,nchar(ARG_ppm_source_ab_S_rs$GroupID)),sep="")
+# ARG_ppm_source_ab_S_rs$State <- factor(ARG_ppm_source_ab_S_rs$State,levels = c("None","Healthy","Diseased"))
+
+
+# 来自RS的ARG的相对丰度
+ARG_ppm_source_re_S_rs <- ARG_ppm_source_re_S[which(ARG_ppm_source_re_S$ID %in% rs ),]
+temp <- colSums(ARG_ppm_source_re_S_rs[,-1]) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(temp)[2] <- "abundance"
+temp$ID <- rownames(temp)
+ARG_ppm_source_re_S_rs <- left_join(Group,temp,by = "ID")
+ARG_ppm_source_re_S_rs$Rep <-  paste(substr(ARG_ppm_source_re_S_rs$GroupID,1,2),substr(ARG_ppm_source_re_S_rs$GroupID,5,nchar(ARG_ppm_source_re_S_rs$GroupID)),sep="")
+# ARG_ppm_source_re_S_rs$State <- factor(ARG_ppm_source_re_S_rs$State,levels = c("None","Healthy","Diseased"))
+
+
+# 来自病原菌的ARG的相对丰度
+ARG_ppm_source_re_S_pa <- ARG_ppm_source_re_S[which(ARG_ppm_source_re_S$ID %in% pathogen_list$Species & !ARG_ppm_source_re_S$ID %in% rs),]
+temp <- colSums(ARG_ppm_source_re_S_pa[,-1]) %>% as.data.frame() %>% rownames_zyz(.,cbindrowname = T);colnames(temp)[2] <- "abundance"
+ARG_ppm_source_re_S_pa <- left_join(Group,temp,by = "ID")
+ARG_ppm_source_re_S_pa$Rep <-  paste(substr(ARG_ppm_source_re_S_pa$GroupID,1,2),substr(ARG_ppm_source_re_S_pa$GroupID,5,nchar(ARG_ppm_source_re_S_pa$GroupID)),sep="")
+
+
+# 选择ppm丰度进行计算！
+Group_rs <-ARG_ppm_source_ab_S_rs[which(ARG_ppm_source_ab_S_rs$State!="None"),]
+Group_rs$State=factor(Group_rs$State,levels =c("None","Healthy","Diseased"))
+
+
+
+library(ggpubr)
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+symnum.args <- list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns"))
+P2 <- ggplot(data = Group_rs,aes(x= State,y = abundance,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=.6,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6,size = .8)+
+  # geom_line(aes(group=Rep), color="gray" ,size=.2,alpha=1) +
+  facet_wrap(~Source,scales = "free_x")+
+  theme(legend.position = "none")+
+
+  # stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("ARG abundance from Rs (ppm)")
+  # scale_y_continuous(labels = scales::percent,trans = "sqrt")
+# save_pdf("01.output/fig1/T-pair_ARGMGEboxplot.pdf",height = 4,width = 8)
+P2
+save_pdf("03.figure/03.arg_analysis/ARG_Rs_ppm_Ttest.pdf",height = 3,width = 3)
+
+
+save_rdata(Group_rs,file = "04.datasave/Rdata/V1_JFGNatureARGsRs_231216.Rdata")
+
+```
+
+<!-- # ARG的青枯菌贡献度 -->
+<!-- ```{r} -->
+
+
+<!-- # ARG的实际的增长情况 -->
+<!-- # Rs对于ARG丰度的增长贡献！ -->
+<!-- Rs/(A-B) -->
+
+<!-- t.test(1:10, y = c(7:20))  -->
+<!-- t.reslt <- t.test(7:20, y = c(1:10))  -->
+<!-- t.reslt$statistic -->
+<!-- t.reslt$estimate -->
+<!-- t.reslt$conf.int -->
+<!-- t.reslt$p.value -->
+<!-- t.reslt$conf.int -->
+
+
+<!-- ``` -->
+
+
+
+
+# ARG溯源病原菌的T-test
+```{r}
+
+attach(ARG_ppm_source_ab_pa)
+
+# 来自RS的ARG的ppm丰度
+# ARG_ppm_source_ab_S_rs <- ARG_ppm_source_ab_S[which(ARG_ppm_source_ab_S$ID %in% rs ),]
+temp <- ARG_ppm_source_ab_pa %>%rownames_zyz(.,transf=T) %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+Group_pa <- left_join(Group,temp,by = "ID")
+Group_pa$Rep <-  paste(substr(Group_pa$GroupID,1,2),substr(Group_pa$GroupID,5,nchar(Group_pa$GroupID)),sep="")
+
+
+
+library(ggpubr)
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+symnum.args <- list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns"))
+P2 <- ggplot(data = Group_pa,aes(x= State,y = Group_pa$Zoonotic,color=State))+
+  theme_jgfbw()+
+  # scale_color_manual(values = color_zyz1)+
+  # scale_fill_manual(values = color_zyz1)+
+  geom_violin(width=1,size = .2,alpha=0,position = position_dodge(.5)) +
+  # geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+  #              position = position_dodge(.5)) +
+  geom_point(alpha=.6,size=3)+
+  geom_line(aes(group=Rep), color="gray" ,size=.2,alpha=1) +
+  facet_wrap(~Source,scales = "free_x")+
+  theme(legend.position = "none")+
+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("ARG abundance from Rs (ppm)")
+  # scale_y_continuous(labels = scales::percent,trans = "sqrt")
+# save_pdf("01.output/fig1/T-pair_ARGMGEboxplot.pdf",height = 4,width = 8)
+P2
+save_pdf("03.figure/03.arg_analysis/ARG_alpha_host_Ttest.pdf",height = 3,width = 3)
+
+```
+
+
+
+# ARG溯源病原菌的富集动态
+```{r}
+
+# Genus水平相对丰度
+LorMe04::community_plot(plotprefix ="ARG_ppm_source_ab_pa_nck" ,inputframe = ARG_ppm_source_ab_pa_nck,n = 4,inputformat = 2,groupframe = Group_nck,treatlocation =8,replocation = 11 ,treatorder = c("Healthy","Diseased"))
+P2 <- ARG_ppm_source_ab_pa_nck_barplot+facet_grid(State~Source,scales = "free")+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0),labels = scales::percent) +
+  theme_jgfbw()+
+  theme(legend.position = "bottom")+
+  theme(legend.key.size = unit(.3,'cm'))+theme(panel.margin.x=unit(0.8, "lines"))+ guides(fill=guide_legend(nrow =2))+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())
+  # theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+P2
+
+LorMe04::community_plot(plotprefix ="ARG_ppm_source_ab_pa_d" ,inputframe = ARG_ppm_source_ab_pa_d,n = 3,inputformat = 2,groupframe = Group_d,treatlocation =9,replocation = 1 )
+P1 <- ARG_ppm_source_ab_pa_d_alluvialplot+scale_x_discrete()+xlab("")+ylab("ppm abundance")+
+  scale_fill_npg()+
+  scale_y_continuous(expand = c(0,0))
+P1
+
+
+
+
+
+```
+
+
+
+# ARG溯源alpha多样性
+```{r}
+# 可以用_nck删除掉，保留ck
+alpha_ARG_nck <- LorMe04::Alpha_diversity_calculator(input = ARG_ppm_source_ab_S_nck,prefix = "",inputformat = 2,reads = F)
+Group_alpha <- cbind(Group_nck,alpha_ARG_nck)
+Group_alpha$State=factor(Group_alpha$State,levels =c("None","Healthy","Diseased"))
+
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+Shannon_ARG_nck <- ggplot(data = Group_alpha,aes(x= State,y = Shannon,color=State))+
+  theme_jgfbw()+
+  # scale_color_manual(values = color_zyz1)+
+  # scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=2,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~City,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Bacteria Shannon")
+Shannon_ARG_nck
+
+
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+Shannon_ARG_all <- ggplot(data = Group_alpha,aes(x= State,y = Group_alpha$`Species number`,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=.6,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~Source,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  # scale_y_continuous(labels = scales::percent) +
+  # stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Shannon index of ARG host")
+Shannon_ARG_all
+
+Shannon_ARG_all <- ggplot(data = Group_alpha,aes(x= State,y = Group_alpha$Shannon,color=State))+
+  theme_jgfbw()+
+  scale_color_manual(values = color_zyz1)+
+  scale_fill_manual(values = color_zyz1)+
+  # geom_violin(width=.6,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.2,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  # geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  facet_wrap(~Source,scales = "free_x",nrow = 1,)+
+  theme(legend.position = "none")+
+  # theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  # scale_y_continuous(labels = scales::percent) +
+  # stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  stat_compare_means(comparisons = my_comparison,method = "wilcox.test",bracket.size=0,vjust = .7,size=3,label = "p.signif")+
+  xlab("")+ylab("Shannon index of ARG host")
+Shannon_ARG_all
+
+save_pdf("03.figure/03.arg_analysis/ARG_host_alpha2_Ttest.pdf",height = 3,width = 3)
+
+temp <- LorMe::auto_signif_test(data = Group_alpha[which(Group_alpha$Source=="Rhizosphere"),],treatment_col = 8 ,value_col = 14)
+temp <- LorMe::auto_signif_test(data = Group_alpha[which(Group_alpha$Source=="Stem"),],treatment_col = 8 ,value_col = 14 )
+
+temp <- LorMe::auto_signif_test(data = Group_alpha[which(Group_alpha$Source=="Rhizosphere"),],treatment_col = 8 ,value_col = 15)
+temp <- LorMe::auto_signif_test(data = Group_alpha[which(Group_alpha$Source=="Stem"),],treatment_col = 8 ,value_col = 15 )
+
+
+library(dplyr)
+Group_alpha %>%
+  filter(Source == "Rhizosphere") %>%
+  group_by(State) %>%
+  summarise(mean_species = mean(Shannon, na.rm = TRUE)) %>% as.data.frame()
+Group_alpha %>%
+  filter(Source == "Stem") %>%
+  group_by(State) %>%
+  summarise(mean_species = mean(Shannon, na.rm = TRUE)) %>% as.data.frame()
+
+
+library(dplyr)
+Group_alpha %>%
+  filter(Source == "Rhizosphere") %>%
+  group_by(State) %>%
+  summarise(mean_species = mean(`Species number`, na.rm = TRUE)) %>% as.data.frame()
+
+Group_alpha %>%
+  filter(Source == "Stem") %>%
+  group_by(State) %>%
+  summarise(mean_species = mean(`Species number`, na.rm = TRUE)) %>% as.data.frame()
+
+
+```
+
+# ARG溯源beta多样性
+```{r}
+
+Group_rh$State=factor(Group_rh$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+attach(ARG_ppm_source_ab_S_rh)
+#计算hellinger标准化的数据
+ARG_ppm_source_ab_S_rh_hellinger = decostand(rownames_zyz(ARG_ppm_source_ab_S_rh,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "ARG_ppm_source_ab_S_rh",inputframe = ARG_ppm_source_ab_S_rh,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+LorMe04::structure_plot(plotprefix = "ARG_ppm_source_ab_S_rh",inputframe = ARG_ppm_source_ab_S_rh_hellinger,inputformat = 2,groupframe = Group_rh,treatlocation = 8)
+ARG_ppm_source_ab_S_rh_PCA
+ARG_ppm_source_ab_S_rh_PCOA
+adonis = adonis(rownames_zyz(ARG_ppm_source_ab_S_rh,transform = T)~Group_rh$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+# 需要data.pca，计算坐标轴的解释度
+# 需要PCAframe，计算点的位置
+# 需要Group，用于分面的计算
+attach(data.pca)
+attach(ARG_ppm_source_ab_S_rh_PCAframe)
+attach(Group_rh)
+
+spider_PCA(data.pac = data.pca,PCAframe = ARG_ppm_source_ab_S_rh_PCAframe,Group = Group_rh,Treatment = "State",abundance = ARG_ppm_source_ab_S_rh)
+
+# 可视化
+beta_ARG_rh <- ggplot(scrs, aes(PCA1, PCA2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCA1, yend = oPCA2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =max(scrs$PCA1)-20, y = max(scrs$PCA2)-10, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.2,.9))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pca1, y = pca2)#,title="bray_curtis PCoA"
+beta_ARG_rh
+save_pdf("03.figure/03.arg_analysis/S_ARG_host_PCA_rh.pdf",height = 3,width = 3)
+
+# 绘制解释度图片
+attach(scrs)
+Group_pca <- left_join(Group,rownames_zyz(scrs,transform = F,cbindrowname = T)) %>% na.omit()
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+rh_pca1 <- ggplot(data = Group_pca,aes(x= State,y = PCA1,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjurh = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")+
+  coord_flip()
+rh_pca1
+
+rh_pca2 <- ggplot(data = Group_pca,aes(x= State,y = PCA2,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  # scale_y_continuous(labels = scales::percent) +
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjurh = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.title.y=element_blank(), axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")
+rh_pca2
+
+{
+  adonis_State = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group_rh$State ,permutations = 999, dirhance = 'bray')
+  adonis_City = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group_rh$City ,permutations = 999, dirhance = 'bray')
+  adonis_City_State = adonis(rownames_zyz(ARG_ppm_type_ab_rh,transform = T)~Group_rh$City+Group_rh$State ,permutations = 999, dirhance = 'bray')
+  
+  adonis_R2 <-adonis_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_2 <-adonis_City$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_2 <- adonis_City$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_3 <-adonis_City_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_3 <- adonis_City_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  
+  adonis_df1 <- data.frame(Treat="State",R2=adonis_R2,P=adonis_P)
+  adonis_df2 <- data.frame(Treat="City",R2=adonis_R2_2,P=adonis_P_2)
+  adonis_df3 <- data.frame(Treat="State:City",R2=adonis_R2_3,P=adonis_P_3)
+  adonis_df <- rbind(adonis_df1,adonis_df2,adonis_df3)
+  adonis_df$Treat2 <- paste0(adonis_df$Treat," (p=",adonis_df$P,")")
+}
+adonis_df
+adonis <- ggplot(data = adonis_df,aes(x = Treat2,y = R2))+
+  geom_col(fill=color_zyz3[1],width = .2)+
+  theme_jgf()+
+  # scale_y_continuous(labels = scales::percent) +
+  xlab("")+ylab("Interpretability")+
+  scale_x_discrete(guide = guide_axis(position = "right")) + 
+  scale_y_continuous(guide = guide_axis(position = "top"))+
+  coord_flip()
+adonis
+
+
+adonis <- ggplot(data = adonis_df, aes(x = Treat2, y = R2)) +
+  geom_col(fill = color_zyz3[1], width = .25) +
+  theme_jgf() +
+  xlab("") + ylab("Interpretability") +
+  scale_x_discrete(guide = guide_axis(position = "right")) +
+  scale_y_continuous(
+    breaks = c(0, 0.30),
+    labels = c("0", "0.3"),
+    expand = expansion(mult = c(0, 0.05)),
+    guide = guide_axis(position = "top")
+  ) +
+  coord_flip()
+adonis
+
+
+temp1 <- (rh_pca1|adonis)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+temp2 <- (beta_ARG_rh|rh_pca2)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+(temp1/temp2)+ plot_layout(heights = c(1,4))+theme(plot.margin=unit(rep(0,4),'lines'))
+
+save_pdf("03.figure/03.arg_analysis/PCOA_host_rh.pdf",width = 5.5,height = 4.5)
+
+
+#######___________________
+Group_st$State=factor(Group_st$State,levels =c("Healthy","Diseased"))
+zyz_cols <- color_zyz1
+names(zyz_cols) <- c("Healthy","Diseased") ##所有处理均以CS_col映射颜色##
+attach(ARG_ppm_source_ab_S_st)
+#计算hellinger标准化的数据
+ARG_ppm_source_ab_S_st_hellinger = decostand(rownames_zyz(ARG_ppm_source_ab_S_st,transform = T),"hellinger") %>% t() %>% rownames_zyz(.,cbindrowname = T,nameID = "ID")
+LorMe04::structure_plot(plotprefix = "ARG_ppm_source_ab_S_st",inputframe = ARG_ppm_source_ab_S_st,inputformat = 2,groupframe = Group_st,treatlocation = 8)
+LorMe04::structure_plot(plotprefix = "ARG_ppm_source_ab_S_st",inputframe = ARG_ppm_source_ab_S_st_hellinger,inputformat = 2,groupframe = Group_st,treatlocation = 8)
+ARG_ppm_source_ab_S_st_PCA
+ARG_ppm_source_ab_S_st_PCOA
+adonis = adonis(rownames_zyz(ARG_ppm_source_ab_S_st,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+print(adonis)
+
+# 需要data.pca，计算坐标轴的解释度
+# 需要PCAframe，计算点的位置
+# 需要Group，用于分面的计算
+attach(data.pca)
+attach(ARG_ppm_source_ab_S_st_PCAframe)
+attach(Group_st)
+
+spider_PCA(data.pac = data.pca,PCAframe = ARG_ppm_source_ab_S_st_PCAframe,Group = Group_st,Treatment = "State",abundance = ARG_ppm_source_ab_S_st)
+# spider_PCA(data.pac = data.pca,PCAframe = ARG_ppm_source_ab_S_rh_PCAframe,Group = Group_rh,Treatment = "State")
+# 可视化
+beta_ARG_st <- ggplot(scrs, aes(PCA1, PCA2, color = Group)) +#,color=Status
+  geom_segment(data = segs,size=.4,alpha=.5, mapping = aes(xend = oPCA1, yend = oPCA2,)) + # spiders
+  geom_point(size=2,alpha=.5) +                                              # sample scores
+  # geom_text(aes(label = rownames(scrs)),size = 3)+ 
+  geom_point(data = cent, size = 2,alpha=.9) +                         # centroids
+  geom_vline(xintercept = 0, color = 'gray', linetype=2, size = 0.2) + 
+  geom_hline(yintercept = 0, color = 'gray', linetype=2, size = 0.2) +
+  # stat_ellipse(level=.85)+
+  # geom_text_repel(aes(label=varID))+
+  #scale_y_continuous(position = "right")+#坐标轴右侧
+  scale_color_manual(values = zyz_cols)+
+  annotate("text", x =max(scrs$PCA1)-15, y = max(scrs$PCA2)-5, label =R2P ,size=3.5,family='serif')+
+  # annotate("text", x =max(scrs$PCo1), y = max(scrs$PCo2)-0.1, label =P ,size=3.5,family='serif')+
+  theme_jgf()+#去掉背景框
+  theme( legend.title = element_blank())+
+  theme(legend.background = element_rect(fill='transparent'))+
+  theme(legend.key.size = unit(.15,'cm'))+
+  theme(legend.position = c(.7,.1))+
+  # theme(legend.direction = "horizontal")+
+  # theme(legend.position = c(-.13,-.13))+
+  labs(x = pca1, y = pca2)#,title="bray_curtis PCoA"
+beta_ARG_st
+save_pdf("03.figure/03.arg_analysis/S_ARG_host_PCA_st.pdf",height = 3,width = 3)
+
+
+
+# 绘制解释度图片
+attach(scrs)
+Group_pca <- left_join(Group,rownames_zyz(scrs,transform = F,cbindrowname = T)) %>% na.omit()
+my_comparison=list(c("Healthy","Diseased")) #定义比较的分组
+st_pca1 <- ggplot(data = Group_pca,aes(x= State,y = PCA1,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")+
+  coord_flip()
+st_pca1
+
+st_pca2 <- ggplot(data = Group_pca,aes(x= State,y = PCA2,color=State))+
+  theme_jgf()+
+  scale_color_manual(values = zyz_cols)+
+  scale_fill_manual(values = zyz_cols)+
+  # geom_violin(width=1,size = .5,alpha=0.9,position = position_dodge(.5)) +
+  geom_boxplot(width=0.5,size = .2,alpha=0.7,outlier.size=0,coef=1,# coef control the IQR
+               position = position_dodge(.5)) +
+  geom_point(alpha=.6)+
+  geom_line(aes(group=Rep1), color="gray" ,size=.2,alpha=.4) +
+  theme(legend.position = "none")+
+  # scale_y_continuous(labels = scales::percent) +
+  stat_compare_means(comparisons = my_comparison,paired = T,method = "t.test",label = "p.format" ,bracket.size=0,vjust = .7,size=3)+
+  xlab("")+ylab("")+
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+  theme(axis.title.y=element_blank(), axis.text.y=element_blank(),axis.ticks.y=element_blank())+
+  theme(legend.position="none")
+st_pca2
+
+
+
+{
+  adonis_State = adonis(rownames_zyz(ARG_ppm_type_ab_st,transform = T)~Group_st$State ,permutations = 999, distance = 'bray')
+  adonis_City = adonis(rownames_zyz(ARG_ppm_type_ab_st,transform = T)~Group_st$City ,permutations = 999, distance = 'bray')
+  adonis_City_State = adonis(rownames_zyz(ARG_ppm_type_ab_st,transform = T)~Group_st$City+Group_st$State ,permutations = 999, distance = 'bray')
+  
+  adonis_R2 <-adonis_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P <- adonis_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_2 <-adonis_City$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_2 <- adonis_City$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  adonis_R2_3 <-adonis_City_State$aov.tab$R2[1] %>% round(.,2)
+  adonis_P_3 <- adonis_City_State$aov.tab$`Pr(>F)`[1]%>% round(.,4)
+  
+  adonis_df1 <- data.frame(Treat="State",R2=adonis_R2,P=adonis_P)
+  adonis_df2 <- data.frame(Treat="City",R2=adonis_R2_2,P=adonis_P_2)
+  adonis_df3 <- data.frame(Treat="State:City",R2=adonis_R2_3,P=adonis_P_3)
+  adonis_df <- rbind(adonis_df1,adonis_df2,adonis_df3)
+  adonis_df$Treat2 <- paste0(adonis_df$Treat," (p=",adonis_df$P,")")
+}
+adonis_df
+adonis <- ggplot(data = adonis_df,aes(x = Treat2,y = R2))+
+  geom_col(fill=color_zyz3[1],width = .2)+
+  theme_jgf()+
+  # scale_y_continuous(labels = scales::percent) +
+  xlab("")+ylab("Interpretability")+
+  scale_x_discrete(guide = guide_axis(position = "right")) + 
+  scale_y_continuous(guide = guide_axis(position = "top"))+
+  coord_flip()
+adonis
+
+adonis <- ggplot(data = adonis_df, aes(x = Treat2, y = R2)) +
+  geom_col(fill = color_zyz3[1], width = .25) +
+  theme_jgf() +
+  xlab("") + ylab("Interpretability") +
+  scale_x_discrete(guide = guide_axis(position = "right")) +
+  scale_y_continuous(
+    breaks = c(0, 0.30),
+    labels = c("0", "0.3"),
+    expand = expansion(mult = c(0, 0.05)),
+    guide = guide_axis(position = "top")
+  ) +
+  coord_flip()
+adonis
+
+
+temp1 <- (st_pca1|adonis)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+temp2 <- (beta_ARG_st|st_pca2)+ plot_layout(widths = c(4,1))+theme(plot.margin=unit(rep(0,4),'lines'))
+(temp1/temp2)+ plot_layout(heights = c(1,4))+theme(plot.margin=unit(rep(0,4),'lines'))
+
+save_pdf("03.figure/03.arg_analysis/PCOA_host_st.pdf",width = 5.5,height = 4.5)
+
+
+```

@@ -1,0 +1,180 @@
+---
+title: "数据处理"
+author: "yaozhong_zhang"
+date: "2023-02-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+path <- getwd()
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = path)
+knitr::opts_knit$set(root.dir = path)
+package <- c('readxl','magrittr','LorMe','randomForest',
+             'ggtree','reshape2','ggplot2','dplyr','tidyr',
+             'readr','purrr','tibble','stringr','forcats',
+             'ggplot2','ggsci','ggridges','RColorBrewer','pheatmap',
+             'patchwork','ggpubr','zyzPackage','cowplot','ggrepel','networkD3')
+
+lapply(package, function(x){library(x, character.only = T)}) 
+source("00.libs/functions/project_paths.R")
+# load("/Users/astudentx/Desktop/TAVMM/Visualization/04.table/Pangenone.Rdata")
+# load("/Users/astudentx/Desktop/TAVMM/Visualization/04.table/biopollutone.Rdata")
+# load("/Users/astudentx/Desktop/TAVMM/Visualization/04.table/Data_analysis.Rdata")
+
+# load("/Users/astudentx/Desktop/TAVMM/Visualization2/04.table/0.data_input.Rdata")
+# load("/Users/astudentx/Desktop/TAVMM/Visualization2/04.table/1.Pangenomes.Rdata")
+# load("/Users/astudentx/Desktop/TAVMM/Visualization2/04.table/3.biopollutome.Rdata")
+
+load("/Users/astudentx/Documents/01.Work/01.Analysis/01zyz_211126_BP-Tracer/Visualization2/04.table/0.data_input.Rdata")
+load("/Users/astudentx/Documents/01.Work/01.Analysis/01zyz_211126_BP-Tracer/Visualization2/04.table/1.Pangenomes.Rdata")
+load("/Users/astudentx/Documents/01.Work/01.Analysis/01zyz_211126_BP-Tracer/Visualization2/04.table/3.biopollutome.Rdata")
+
+
+pathogen_tax <- read.csv(file = "/Users/astudentx/Documents/01.Work/01.Analysis/01zyz_211126_BP-Tracer/Visualization2/01.rawdata/Pathogen/Pathogen_final.csv")
+pathogen_list <- pathogen_tax %>% dplyr::select(Species,SpeciesID,Host)
+attach(pathogen_list)
+attach(pathogen_tax)
+attach(Pangenome_tax)
+
+```
+
+# 导入Group文件并分组
+```{r}
+Group <- readxl::read_xlsx("01.rawdata/Group/Group_info_final.xlsx") %>% as.data.frame() %>% 
+  dplyr::select(ID,LinuxID,TreatID,GroupID,Treatment,City,SampleOrder,State,Source,Rep_Group)
+
+Group$Rep1 <-  paste(substr(Group$GroupID,1,2),substr(Group$GroupID,5,nchar(Group$GroupID)),sep="")
+Group$Rep2 <-  paste(substr(Group$Treatment,1,2),substr(Group$Treatment,5,nchar(Group$Treatment)),sep="")
+  
+
+Group_h <- Group[which(Group$State!="Diseased"),]
+Group_d <- Group[which(Group$State!="Healthy"),]
+Group_rh <- Group[which(Group$Source=="Rhizosphere"),]
+Group_ck <- Group[which(Group$Source=="CK"),]
+Group_nck <- Group[which(Group$State!="None"),]
+Group_st <- Group[which(Group$Source=="Stem"),]
+
+
+
+Group_hrh <- Group_h[which(Group_h$Source=="Rhizosphere"),]
+Group_hst <- Group_h[which(Group_h$Source=="Stem"),]
+Group_drh <- Group_d[which(Group_d$Source=="Rhizosphere"),]
+Group_dst <- Group_d[which(Group_d$Source=="Stem"),]
+
+order <- Group$ID
+order_rh <- Group_rh$ID
+order_ck <- Group_ck$ID
+order_st <- Group_st$ID
+
+```
+
+# 数据保存
+
+```{r}
+
+save_rdata(
+  pathogen_list,
+  pathogen_tax,
+  Pangenome_tax,
+  Group,
+  Group_rh,
+  Group_ck,
+  Group_st,
+  Group_h,
+  Group_d,
+  Group_nck,
+  Group_hrh,
+  Group_hst,
+  Group_dst,
+  Group_drh,
+  order,
+  order_rh,
+  order_ck,
+  order_st,
+  file = "04.datasave/Rdata/Group_and_tax_V230225.Rdata"
+)
+
+```
+
+# Apply the fixed legacy sample-exclusion list.  The IDs were exported from the
+# historical ProblemID.Rdata object so that this preprocessing step no longer
+# depends on an output produced later in the workflow.
+```{r}
+problem_id_file <- "01.rawdata/Group/01.data_preparation/legacy_problem_sample_ids.tsv"
+if (!file.exists(problem_id_file)) {
+  stop(sprintf("Required legacy exclusion list is missing: %s", problem_id_file))
+}
+ID_problem_final <- utils::read.delim(problem_id_file, stringsAsFactors = FALSE)$sample_id
+if (anyNA(ID_problem_final) || anyDuplicated(ID_problem_final)) {
+  stop("The legacy exclusion list contains missing or duplicated sample IDs.")
+}
+Group <- readxl::read_xlsx("01.rawdata/Group/Group_info_final.xlsx") %>% as.data.frame() %>% 
+  dplyr::select(ID,LinuxID,TreatID,GroupID,Treatment,City,SampleOrder,State,Source,Rep_Group)
+Group$Rep1 <-  paste(substr(Group$GroupID,1,2),substr(Group$GroupID,5,nchar(Group$GroupID)),sep="")
+Group$Rep2 <-  paste(substr(Group$Treatment,1,2),substr(Group$Treatment,5,nchar(Group$Treatment)),sep="")
+Group$Rep3 <- stringr::str_replace(Group$TreatID,pattern = "-H" ,replacement = "")
+Group$Rep3 <- stringr::str_replace(Group$Rep3,pattern = "-D" ,replacement = "")
+
+ID_pro <- Group[which(Group$ID %in% ID_problem_final ),]
+ID_pro_t1 <- ID_pro$Rep1
+ID_pro_t2 <- ID_pro$Rep3
+
+# 二选一
+{
+  # Group <- Group[which(!Group$Rep1 %in% ID_pro_t1 ),]
+  Group <- Group[which(!Group$Rep3 %in% ID_pro_t2 ),]
+}
+
+
+
+
+Group_h <- Group[which(Group$State!="Diseased"),]
+Group_d <- Group[which(Group$State!="Healthy"),]
+Group_rh <- Group[which(Group$Source=="Rhizosphere"),]
+Group_ck <- Group[which(Group$Source=="CK"),]
+Group_nck <- Group[which(Group$State!="None"),]
+Group_st <- Group[which(Group$Source=="Stem"),]
+
+
+
+Group_hrh <- Group_h[which(Group_h$Source=="Rhizosphere"),]
+Group_hst <- Group_h[which(Group_h$Source=="Stem"),]
+Group_drh <- Group_d[which(Group_d$Source=="Rhizosphere"),]
+Group_dst <- Group_d[which(Group_d$Source=="Stem"),]
+
+order <- Group$ID
+order_rh <- Group_rh$ID
+order_ck <- Group_ck$ID
+order_st <- Group_st$ID
+
+
+```
+# 筛选后的数据保存
+```{r}
+
+save_rdata(
+  pathogen_list,
+  pathogen_tax,
+  Pangenome_tax,
+  Group,
+  Group_rh,
+  Group_ck,
+  Group_st,
+  Group_h,
+  Group_d,
+  Group_nck,
+  Group_hrh,
+  Group_hst,
+  Group_dst,
+  Group_drh,
+  order,
+  order_rh,
+  order_ck,
+  order_st,
+  file = "04.datasave/Rdata/Group_and_tax_filter_V230810.Rdata"
+)
+
+```
+

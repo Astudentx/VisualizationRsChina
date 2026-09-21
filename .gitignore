@@ -1,0 +1,14 @@
+# Immutable inputs and regenerable analysis products
+01.rawdata/
+02.processed/
+03.figure/
+04.datasave/
+05.mainfigure/
+
+# Local R/RStudio state and operating-system metadata
+.RData
+.Rhistory
+.Rproj.user/
+.DS_Store
+**/.DS_Store
+**/~$*
