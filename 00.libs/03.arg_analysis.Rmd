@@ -18,8 +18,7 @@ package <- c('readxl','magrittr','LorMe','randomForest',
              'patchwork','ggpubr','zyzPackage','cowplot','ggrepel','networkD3','vegan')
 
 lapply(package, function(x){library(x, character.only = T)}) 
-load("04.datasave/Rdata/Group_and_tax_V230225.Rdata")
-load(file = "04.datasave/Rdata/Group_and_tax_filter_V230810.Rdata")
+source("00.libs/00.sample_filter.R")
 source("00.libs/functions/legacy_helpers.R")
 source("00.libs/functions/project_paths.R")
 ```

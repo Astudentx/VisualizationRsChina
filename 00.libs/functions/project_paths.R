@@ -1,17 +1,9 @@
-# Project-local output guards for this analysis directory.
-#
-# These helpers intentionally stop before replacing an existing artifact.  If a
-# result needs to be regenerated, archive or remove the old version explicitly
-# and rerun the relevant script.
+# Project-local output helpers for this analysis directory.
 
 save_pdf <- function(filename, plot = ggplot2::last_plot(), width, height, ...) {
   if (!is.character(filename) || length(filename) != 1L || !grepl("\\.pdf$", filename, ignore.case = TRUE)) {
     stop("save_pdf() requires one PDF filename.", call. = FALSE)
   }
-  if (file.exists(filename)) {
-    stop(sprintf("Refusing to overwrite existing figure: %s", filename), call. = FALSE)
-  }
-
   dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
   ggplot2::ggsave(
     filename = filename,

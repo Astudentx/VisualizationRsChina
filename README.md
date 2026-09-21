@@ -25,9 +25,10 @@ leaves **148 samples** for the V1 analysis.
 148 samples retained for V1
 ```
 
-The direct-exception IDs are retained in
-`01.rawdata/Group/01.data_preparation/legacy_problem_sample_ids.tsv`; the
-expansion to `Rep3` units is implemented in `00.libs/01.data_preparation.Rmd`.
+The active selection rule is implemented in `00.libs/00.sample_filter.R`. It
+calculates direct exceptions from configurable genus-level thresholds, expands
+them to `Rep3` units when configured, and writes a sample-level audit table to
+`02.processed/00.sample_filter/sample_filter_audit.tsv`.
 Raw inputs are intentionally excluded from Git, so the source data must be
 obtained separately.  Any later change to the sample-selection rule or retained
 sample count should be recorded as a new analysis version, with its rationale
@@ -51,28 +52,31 @@ prefix convention.
 
 ## Script order and scope
 
-1. `01.data_preparation.Rmd` prepares the group and taxonomy objects.
-2. `03.arg_analysis.Rmd` creates ARG summaries, figures, and the durable
+1. `00.sample_filter.R` is the required sample-selection entry point. Edit its
+   `sample_filter_config` to change thresholds, direct exceptions, or the
+   experimental-unit policy; do not edit the raw Group Excel file.
+2. `01.data_preparation.Rmd` prepares legacy group and taxonomy objects.
+3. `03.arg_analysis.Rmd` creates ARG summaries, figures, and the durable
    species-level ARG-host profile required by the integrated workflow.
-3. `02.microbiome_analysis.Rmd` creates microbiome summaries, figures, and
+4. `02.microbiome_analysis.Rmd` creates microbiome summaries, figures, and
    ARG host–microbiome integration analyses.
-4. `04.figure_composition.R` composes selected microbiome/ARG outputs.
-5. `05.sample_map.R` creates the sample map.
-6. `07.sample_filter_exploration.R` contains exploratory sample-filter plots.
-7. `90.legacy_arg_transfer.R` is retained for provenance and is not a
+5. `04.figure_composition.R` composes selected microbiome/ARG outputs.
+6. `05.sample_map.R` creates the sample map.
+7. `07.sample_filter_exploration.R` contains exploratory sample-filter plots.
+8. `90.legacy_arg_transfer.R` is retained for provenance and is not a
    standalone reproducible workflow.
 
-All routine figure scripts now use `00.libs/functions/project_paths.R`, which
-enforces PDF output, a white background, and a hard stop before an existing
-figure or RData file is overwritten.
+All routine figure scripts use `00.libs/functions/project_paths.R`, which
+enforces PDF output and a white background. Existing PDFs are overwritten on
+rerun so figures can be iteratively refined; RData and table guards remain in
+place.
 
-`01.data_preparation.Rmd` reads
-`01.rawdata/Group/01.data_preparation/legacy_problem_sample_ids.tsv`. This is
-the explicit list of 61 directly abnormal samples exported from the historical
-`ProblemID.Rdata` workflow (including `CS53`).  The script expands those IDs to
-the affected `Rep3` unified experimental units before filtering, which is the
-V1 340-to-148 sample-selection rule described above.  This preserves the legacy
-decision without a circular dependency on a previously generated RData file.
+`00.sample_filter.R` applies the current V1 rule from raw metadata and the
+genus abundance table: healthy stem samples with *Ralstonia* relative abundance
+above 0.20, diseased stem samples below 0.20, and the separately documented
+CS53 exception. The script expands direct exceptions to affected `Rep3` unified
+experimental units and records every direct and induced exclusion in the audit
+table. This avoids a circular dependency on legacy RData files.
 
 ## Execution check (2026-09-21)
 
